@@ -1,0 +1,122 @@
+"""Settings from environment variables (and an optional .env file).
+
+Secrets are never hardcoded. A `.env` file at the repo root or in the
+current directory is read if present; real environment variables win.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+DEFAULT_AGENCY_NAME_WORDS: tuple[str, ...] = (
+    "recruit",
+    "recruitment",
+    "staffing",
+    "resourcing",
+    "personnel",
+    "talent",
+    "search partners",
+    "appointments",
+    "selection",
+    "careers",
+)
+
+
+def load_dotenv(path: Path) -> None:
+    """Minimal KEY=VALUE .env reader. Does not override existing env vars."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        # Strip inline comments ("VALUE # note") and surrounding quotes.
+        value = value.split(" #", 1)[0].strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else default
+
+
+def _float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    return float(raw) if raw else default
+
+
+def _words(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    return tuple(w.strip().lower() for w in raw.split(",") if w.strip())
+
+
+@dataclass(frozen=True)
+class Settings:
+    reed_api_key: str = ""
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    reed_max_calls_per_run: int = 300
+    reed_requests_per_second: float = 1.0
+    reed_max_tries: int = 5
+    reed_backoff_base_seconds: float = 1.0
+    agency_name_words: tuple[str, ...] = field(default=DEFAULT_AGENCY_NAME_WORDS)
+    repost_threshold: int = 3
+    lookback_days: int = 90
+
+    def secret_values(self) -> list[str]:
+        return [s for s in (self.reed_api_key, self.supabase_service_role_key) if s]
+
+
+def get_settings() -> Settings:
+    load_dotenv(Path.cwd() / ".env")
+    load_dotenv(REPO_ROOT / ".env")
+    return Settings(
+        reed_api_key=os.environ.get("REED_API_KEY", "").strip(),
+        supabase_url=os.environ.get("SUPABASE_URL", "").strip().rstrip("/"),
+        supabase_service_role_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
+        reed_max_calls_per_run=_int("REED_MAX_CALLS_PER_RUN", 300),
+        reed_requests_per_second=_float("REED_REQUESTS_PER_SECOND", 1.0),
+        reed_max_tries=_int("REED_MAX_TRIES", 5),
+        reed_backoff_base_seconds=_float("REED_BACKOFF_BASE_SECONDS", 1.0),
+        agency_name_words=_words("AGENCY_NAME_WORDS", DEFAULT_AGENCY_NAME_WORDS),
+        repost_threshold=_int("REPOST_THRESHOLD", 3),
+        lookback_days=_int("LOOKBACK_DAYS", 90),
+    )
+
+
+class RedactSecrets(logging.Filter):
+    """Belt and braces: replace any configured secret value in log output."""
+
+    def __init__(self, secrets: list[str]):
+        super().__init__()
+        self._secrets = [s for s in secrets if s]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self._secrets:
+            msg = record.getMessage()
+            for s in self._secrets:
+                msg = msg.replace(s, "***")
+            record.msg, record.args = msg, None
+        return True
+
+
+def setup_logging(settings: Settings, level: int = logging.INFO) -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.addFilter(RedactSecrets(settings.secret_values()))
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(level)
+    # httpx logs full request lines at INFO; we log our own redacted lines.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
