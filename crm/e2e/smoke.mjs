@@ -36,6 +36,8 @@ try {
   const reposts = page.getByRole("checkbox", { name: /Reposts only/ });
   check(await reposts.isChecked(), "Reposts only is on by default");
   await reposts.uncheck();
+  // No Companies House key in the test stack, so nothing can be verified: let unverified companies through.
+  await page.getByRole("checkbox", { name: /Real companies only/ }).uncheck();
   await page.click("button:has-text('Save')");
   await page.waitForSelector("text=Saved ✓");
 
@@ -77,13 +79,40 @@ try {
   await page.waitForSelector("text=Candidate briefs");
   check(true, "candidates tab opens");
 
-  await page.goto(BASE + "/");
+  await page.goto(BASE + "/today");
   const today = await page.locator("[data-testid=outreach-today]").innerText();
   check(today.trim().startsWith("2"), `Today scorecard counts the 2 actions (shows "${today.trim()}")`);
   await page.screenshot({ path: shots + "today-desktop.png", fullPage: true });
 
+  // The simple flow: a lead order from the home page.
+  await page.goto(BASE + "/");
+  check(await page.locator("text=Add ANTHROPIC_API_KEY").count() === 1, "assistant explains it needs a key");
+  await page.click("button:has-text('+ New order')").catch(() => {});
+  await page.fill("#agency_name", "Leeds Finance Recruitment");
+  await page.selectOption("#industry", "Accountancy & Finance");
+  await page.fill("#location", "Leeds");
+  await page.fill("#leads_wanted", "3");
+  await page.click("button:has-text('Create order & find leads')");
+  await page.waitForSelector("[data-testid=order] >> text=Leeds Finance Recruitment");
+  await page.waitForSelector("[data-testid=order] >> text=topping up", { timeout: 60000 });
+  const progress = await page.locator("[data-testid=order-progress]").first().innerText();
+  check(/^[12] \/ 3$/.test(progress.trim()), `order collected and sent its leads (shows "${progress.trim()}")`);
+  const csvText = await page.evaluate(() => fetch("/api/engine/orders/1/leads.csv").then((r) => r.text()));
+  check(csvText.includes("Harlow Group"), "order CSV has the lead");
+  await page.click("[data-testid=order] button:has-text('Pause')");
+  await page.waitForSelector("[data-testid=order] >> text=paused");
+  check(true, "order paused");
+  await page.click("button:has-text('+ New order')");
+  await page.fill("#agency_name", "Rival Recruitment");
+  await page.selectOption("#industry", "Accountancy & Finance");
+  await page.fill("#location", "Leeds");
+  await page.click("button:has-text('Create order & find leads')");
+  await page.waitForSelector("text=already exclusive to Leeds Finance Recruitment");
+  check(true, "a taken industry + region is refused");
+  await page.screenshot({ path: shots + "orders-desktop.png", fullPage: true });
+
   const phone = await browser.newPage({ ...playwright.devices["iPhone 13"], storageState: await page.context().storageState() });
-  for (const p of ["/", "/agencies", "/hot-leads"]) {
+  for (const p of ["/", "/today", "/agencies", "/hot-leads"]) {
     await phone.goto(BASE + p);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check(overflow <= 1, `no sideways page scroll on a phone: ${p}`);
@@ -92,7 +121,7 @@ try {
 
   await phone.close();
   await page.bringToFront();
-  await page.click("header button:has-text('Search')");
+  await page.keyboard.press("Control+k");
   await page.getByLabel("Search", { exact: true }).fill("harl");
   await page.waitForSelector("text=Hot lead · score");
   check(true, "global search (Ctrl/Cmd+K box) finds hot leads");

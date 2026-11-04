@@ -2,16 +2,20 @@ import Link from "next/link";
 import { Badge, Card, ErrorNote, PageHeader } from "@/components/ui";
 import { engineBase, engineOr } from "@/lib/engine";
 import { ago } from "@/lib/format";
+import { GoogleCard } from "./google-card";
 import { SettingsForm } from "./settings-form";
 
 export const dynamic = "force-dynamic";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ google?: string; reason?: string }> }) {
+  const sp = await searchParams;
   const [health, s] = await Promise.all([engineOr<any>("/health", null), engineOr<any>("/settings", null)]);
   return (
     <>
       <PageHeader title="Settings"><Link href="/settings/role-families">Role families →</Link></PageHeader>
+      {sp.google === "error" && <div className="mb-4"><ErrorNote error={`Google didn't connect: ${sp.reason || "try again"}`} /></div>}
       <div className="grid gap-4 lg:grid-cols-2">
+        {s.data && <GoogleCard google={s.data.google} assistant={s.data.assistant} flash={sp.google} />}
         <Card title="Engine connection">
           <p className="text-sm">{engineBase()} {health.data?.db ? <Badge tone="green">connected</Badge> : <Badge tone="red">not reachable</Badge>}</p>
           <ErrorNote error={health.error} />

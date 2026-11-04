@@ -79,6 +79,9 @@ ask JOOBLE_API_KEY "Jooble UK API key"
 ask APIFY_TOKEN "Apify API token (Indeed)"
 ask BRAVE_API_KEY "Brave Search API key"
 ask HUNTER_API_KEY "Hunter.io API key"
+ask ANTHROPIC_API_KEY "Claude API key (assistant)"
+ask GOOGLE_CLIENT_ID "Google OAuth client ID (Sheets)"
+ask GOOGLE_CLIENT_SECRET "Google OAuth client secret"
 for kv in REPOST_THRESHOLD=3 LOOKBACK_DAYS=90 REED_MAX_CALLS_PER_RUN=300 REED_REQUESTS_PER_SECOND=1 \
           ADZUNA_MAX_CALLS_PER_RUN=40 THEIRSTACK_MAX_JOBS_PER_RUN=100 THEIRSTACK_BACKFILL_DAYS=90 ENABLE_DOCS=0; do
   [ -n "$(get "${kv%%=*}")" ] || put "${kv%%=*}" "${kv#*=}"

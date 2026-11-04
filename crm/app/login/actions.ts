@@ -17,7 +17,7 @@ export async function login(form: FormData) {
   clearFailures(ip);
   const s = await makeSession();
   (await cookies()).set(SESSION_COOKIE, s.value, {
-    httpOnly: true, sameSite: "strict", secure: process.env.NODE_ENV === "production" && process.env.INSECURE_COOKIES !== "1",
+    httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" && process.env.INSECURE_COOKIES !== "1",
     path: "/", expires: s.expires,
   });
   redirect(safeNext);

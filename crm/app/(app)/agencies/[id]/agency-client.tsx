@@ -6,7 +6,7 @@ import { PilotDialog, useStageChange } from "@/components/stage-change";
 import { Badge, Button, Card, ComplianceBadge, ErrorNote, Input, Label, Select, Textarea, cn } from "@/components/ui";
 import { api, waitFor } from "@/lib/api";
 import { ACTIVITY_LABEL, d, dt, STAGES, STAGE_LABEL } from "@/lib/format";
-import { QuickLog } from "../../quick-log";
+import { QuickLog } from "../../today/quick-log";
 
 export function AgencyClient({ bundle, templates, families }: { bundle: any; templates: any[]; families: any[] }) {
   const router = useRouter();

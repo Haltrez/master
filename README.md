@@ -103,6 +103,40 @@ logins are limited to 10 per 15 minutes per IP.
 
 ## Daily use
 
+Open the CRM. The home page is all you need:
+
+- **New lead order**: agency, the email to share the sheet with, industry,
+  town, number of leads, once or every week, and the package (sheet only, or
+  sheet + you do the outreach). It searches every job board in the background
+  (a few minutes), creates a Google Sheet in your Drive, shares it with the
+  agency and fills it with verified hot leads only. If fewer are found than
+  asked, it tops up every morning until the number is reached. Weekly orders
+  get that many new leads each week. Each industry + town belongs to one
+  agency only.
+- **Ask the assistant**: type what you need in plain English, e.g. "25 IT
+  leads in Manchester for Apex Recruitment, share with jo@apex.co.uk", "how is
+  the Apex order doing?", "pause the Leeds order", "Apex had a meeting with
+  Harlow Group". It uses the CRM for you.
+- **CSV** on every order works with or without Google.
+
+Everything else (agencies to sell to, outreach scorecard, Role Match, raw
+searches) is under **Advanced**.
+
+### Google Sheets (one-time, ~10 minutes)
+
+1. console.cloud.google.com, create a project, then **APIs & Services >
+   Library**: enable **Google Sheets API** and **Google Drive API**.
+2. **OAuth consent screen**: External, app name "Repost Radar", your email.
+   Scopes: `openid`, `email`, `.../auth/drive.file`. Then **Publish app**
+   (status "In production"). drive.file is not a sensitive scope, so no review
+   is needed, and published apps don't lose access after 7 days.
+3. **Credentials > Create credentials > OAuth client ID**: Web application.
+   Authorised redirect URI: `https://crm.smartemploy.io/api/google/callback`.
+4. Put the client ID and secret in `.env` as `GOOGLE_CLIENT_ID` and
+   `GOOGLE_CLIENT_SECRET`, restart, then **Settings > Connect Google**.
+
+### The old manual flow
+
 1. **Searches.** Add one per niche and region, for example
    "Accountancy - Leeds" with keywords like management accountant and finance
    manager. Click **Run now**, or let Make run them at 06:00.
