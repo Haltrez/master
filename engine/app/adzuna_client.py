@@ -104,8 +104,10 @@ class AdzunaClient:
     def iter_search_pages(self, keywords: str, location: str, radius_miles: int | None = 15,
                           min_salary: int | None = None, max_days_old: int = 60,
                           budget: CallBudget | None = None, max_pages: int = 10) -> Iterator[list[AdzunaJob]]:
-        params: dict[str, Any] = {"what": keywords, "where": location, "results_per_page": PAGE_SIZE,
-                                  "max_days_old": max_days_old, "content-type": "application/json"}
+        # title_only: Adzuna otherwise matches descriptions too ("Mortgage Broker Account Manager"
+        # for "management accountant"). Newest first, so a capped run gets the fresh ads.
+        params: dict[str, Any] = {"title_only": keywords, "where": location, "results_per_page": PAGE_SIZE,
+                                  "max_days_old": max_days_old, "sort_by": "date", "content-type": "application/json"}
         if radius_miles:
             params["distance"] = round(radius_miles * 1.609)
         if min_salary:

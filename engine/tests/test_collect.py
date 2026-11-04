@@ -170,3 +170,18 @@ def test_agency_wording_in_ad_text(sample, text, agency):
     item = {**sample["results"][0], "employerName": "Harper Lane Ltd", "jobDescription": text}
     pb, _ = classify(ReedJob.from_api(item), "employer", {}, agency_name_pattern(DEFAULT_AGENCY_NAME_WORDS))
     assert (pb == "agency") is agency
+
+
+
+@pytest.mark.parametrize("kw,title,ok", [
+    ("management accountant", "Financial/Management Accountant", True),
+    ("management accountant", "Management Accountant (Hybrid)", True),
+    ("management accountant", "Account Manager", False),
+    ("management accountant", "Accounts Payable Manager", False),
+    ("electrical estimator", "Senior Electrical Estimator", True),
+    ("m&e project manager", "M&E Project Manager - Leeds", True),
+    ("software engineer", "Software Engineering Manager", True),
+])
+def test_title_matches(kw, title, ok):
+    from app.collect import title_matches
+    assert title_matches(kw, title) is ok

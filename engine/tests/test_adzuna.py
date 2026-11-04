@@ -41,7 +41,8 @@ def test_paging_namespacing_and_params(caplog):
     assert j.job_id == ID_OFFSET + 4000000000 == adzuna_job_id("4000000000")
     assert j.job_id > 10**12   # never collides with Reed's ids
     q = fake.requests[0].url.params
-    assert (q["what"], q["where"], q["distance"]) == ("management accountant", "Leeds", "24")  # 15 miles in km
+    assert (q["title_only"], q["where"], q["distance"]) == ("management accountant", "Leeds", "24")  # 15 miles in km
+    assert q["sort_by"] == "date" and "what" not in q
     assert "secret-key-456" not in caplog.text
 
 
@@ -83,3 +84,14 @@ def test_known_agency_brand_matching():
     assert not is_known_agency("hays travel", k)
     assert not is_known_agency("reed smith", k)
     assert not is_known_agency("harlow group", k)
+
+
+
+def test_first_run_30_days_then_3(store):
+    from app.collect import run_search
+    s = store.create_search("Accountancy - Leeds", ["management accountant"], "Leeds", 15, None)
+    fake = FakeAdzuna([item(1)])
+    settings = Settings()
+    run_search(s.id, repo=store, reed=None, settings=settings, adzuna=client(fake))
+    run_search(s.id, repo=store, reed=None, settings=settings, adzuna=client(fake))
+    assert [r.url.params["max_days_old"] for r in fake.requests] == ["30", "3"]

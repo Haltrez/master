@@ -71,6 +71,14 @@ AGENCY_PHRASES = re.compile(
     re.IGNORECASE)
 
 
+def title_matches(keyword: str, title: str) -> bool:
+    """Every word of the keyword starts a word of the title: 'management accountant' keeps
+    'Financial/Management Accountant' and drops 'Account Manager' (aggregators match loosely)."""
+    kw = [w for w in re.sub(r"[^a-z0-9&]+", " ", keyword.lower()).split() if len(w) > 1]
+    words = re.sub(r"[^a-z0-9&]+", " ", (title or "").lower()).split()
+    return all(any(t.startswith(k) for t in words) for k in kw)
+
+
 def classify(
     job: Any,
     queried_as: PostedBy,
@@ -172,10 +180,15 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
             if hasattr(repo, "known_agency_norms"):
                 known |= repo.known_agency_norms()
             try:
+                flag = f"adzuna:backfilled:{search_id}"
+                seen_before = hasattr(repo, "cache_get") and repo.cache_get(flag) is not None
                 for keyword in search.keywords:
                     for page in adzuna.iter_search_pages(keyword, search.location, search.radius_miles,
-                                                         search.min_salary, budget=adz_budget):
-                        store_page(page, "employer", "adzuna", known)
+                                                         search.min_salary, budget=adz_budget,
+                                                         max_days_old=3 if seen_before else 30):
+                        store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", "adzuna", known)
+                if hasattr(repo, "cache_set"):
+                    repo.cache_set(flag, {"at": dt.datetime.now(dt.timezone.utc).isoformat()})
             except ReedError as exc:
                 # Adzuna is a second source: a failure there doesn't fail the run.
                 log.warning("run %d: adzuna stopped early: %s", run_id, exc)
@@ -213,6 +226,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
             try:
                 for keyword in search.keywords:
                     for page in src.pages(keyword, search.location, search.radius_miles, first_run):
+                        page = [j for j in page if title_matches(keyword, j.job_title)]
                         result.by_source[src.name] = result.by_source.get(src.name, 0) + len(page)
                         store_page(page, "employer", src.name, known)
                 if has_cache:
