@@ -74,7 +74,7 @@ def rebuild_all(store, settings: Settings, reed=None) -> dict[str, Any]:
         return v if v is not None else default
 
     out["hot_leads"] = rebuild_hot_leads(
-        store, threshold=threshold(store, settings), lookback_days=settings.lookback_days, reed=reed,
+        store, archive_priority=order_priority(store), threshold=threshold(store, settings), lookback_days=settings.lookback_days, reed=reed,
         archive=ArchiveReposts(Wayback(store, max_consecutive_failures=5)) if flag("archive_checks_per_run", 150) else None,
         max_archive_checks=int(flag("archive_checks_per_run", 150)), reposts_only=bool(flag("reposts_only", True)))
     out["agencies"] = rebuild_agencies(store, lookback_days=settings.lookback_days)
@@ -84,6 +84,25 @@ def rebuild_all(store, settings: Settings, reed=None) -> dict[str, Any]:
     except Exception as exc:  # contacts are a bonus; never fail the run over them
         out["lead_contacts"] = {"error": str(exc)}
     return out
+
+
+def order_priority(store):
+    """Score a listing for archive checks: 2 = in an open order's territory and its title matches the
+    order's industry, 1 = in the territory, 0 = anything else."""
+    from .collect import title_matches
+    rows = store.q("""select o.search_id, s.keywords from lead_orders o join searches s on s.id = o.search_id
+                      where o.status in ('collecting', 'waiting', 'error')""") if hasattr(store, "q") else []
+    kws = {r["search_id"]: list(r["keywords"] or []) for r in rows}
+    if not kws:
+        return None
+
+    def score(l) -> int:
+        best = 0
+        for sid in l.search_ids:
+            if sid in kws:
+                best = max(best, 2 if any(title_matches(k, l.title) for k in kws[sid]) else 1)
+        return best
+    return score
 
 
 def collect_one(store, settings: Settings, search_id: int, run_id: int | None = None) -> RunResult:
@@ -122,5 +141,6 @@ def make_tools(store, settings: Settings):
     if settings.brave_api_key:
         from .web_lookup import Brave
         brave = Brave(settings.brave_api_key)
+    from .geo import Geocoder
     return Tools(claude=make_client(settings), ch=ch, reed=make_reed(settings), brave=brave,
-                 hunter=hunter_for(store, settings))
+                 hunter=hunter_for(store, settings), geocoder=Geocoder(store))

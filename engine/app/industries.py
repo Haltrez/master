@@ -10,13 +10,16 @@ from __future__ import annotations
 INDUSTRIES: dict[str, dict] = {
     "Sales & Marketing": {
         "search": ["sales executive", "sales manager", "business development", "account manager",
-                   "sales consultant", "marketing manager", "marketing executive"],
+                   "sales consultant", "area sales manager", "telesales", "marketing manager",
+                   "marketing executive", "digital marketing"],
         "in": "B2B and B2C sales jobs (sales executive, business development, account manager/executive, key "
               "account, field/area sales, telesales/inside sales, sales manager/director, estate agency sales "
               "negotiator, car/vehicle sales, recruitment-free sales roles in any sector) and marketing jobs "
               "(marketing executive/manager, digital marketing, SEO/PPC, content, brand, product marketing, CRM "
               "marketing, marketing director).",
-        "out": "Shop-floor retail (sales assistant, store/shop manager, cashier, optical/pharmacy assistant), "
+        "out": "Door-to-door or face-to-face charity fundraising and outsourced field-marketing teams (they are "
+               "agencies, not employers), shop-floor retail (sales assistant, store/shop manager, cashier, "
+               "optical/pharmacy assistant, bed/furniture showroom staff), "
                "customer service and call-centre support that isn't selling, hospitality, care, admin, "
                "engineering, IT, finance, legal and any job that only mentions sales in passing.",
     },

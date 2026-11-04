@@ -151,3 +151,15 @@ def test_same_ad_in_several_places_in_one_run_is_not_a_repost():
     assert compute_hot_leads(ls, {}, later, threshold=2, reposts_only=True) == []
     gone = L(20, 10, 6)   # an earlier ad we saw end 6 days ago
     assert len(compute_hot_leads(ls + [gone], {}, later, threshold=2, reposts_only=True)) == 1
+
+
+def test_reworded_titles_at_the_same_company_and_town_are_one_role():
+    ls = [L(1, 40, 30, title="sales executive"), L(2, 5, 0, title="door to door sales executive"),
+          L(3, 5, 0, title="store manager"), L(4, 40, 30, title="manager")]
+    leads = compute_hot_leads(ls, RUN, NOW, threshold=2, reposts_only=True)
+    assert [(l["title_norm"], l["posting_count_90d"]) for l in leads] == [("door to door sales executive", 2)]
+
+
+def test_titles_that_differ_by_a_place_are_different_vacancies():
+    ls = [L(1, 40, 30, title="area sales manager"), L(2, 5, 0, title="area sales manager north east")]
+    assert compute_hot_leads(ls, RUN, NOW, threshold=2, reposts_only=True) == []

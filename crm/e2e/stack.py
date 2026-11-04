@@ -30,15 +30,18 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
-def job(i, employer, title, location="Leeds"):
+def job(i, employer, title, location="Leeds", posted="01/09/2026"):
     return {"jobId": 90000000 + i, "employerId": 1000 + i, "employerName": employer, "jobTitle": title,
             "locationName": location, "minimumSalary": 40000, "maximumSalary": 45000, "currency": "GBP",
-            "expirationDate": "20/12/2026", "date": "01/09/2026", "jobDescription": "A role in our finance team.",
+            "expirationDate": "20/12/2026", "date": posted, "jobDescription": "A role in our finance team.",
             "applications": 3, "jobUrl": f"https://www.reed.co.uk/jobs/x/{90000000 + i}"}
 
 
-EMPLOYER_ADS = [job(1, "Harlow Group Ltd", "Management Accountant"), job(2, "Harlow Group Ltd", "Management Accountant - Hybrid"),
-                job(3, "Harlow Group Ltd", "Management Accountant (Leeds)"), job(4, "Northgate Foods", "Credit Controller")]
+# Harlow re-advertised the same role three times (weeks apart): a repost. Northgate posted once.
+EMPLOYER_ADS = [job(1, "Harlow Group Ltd", "Management Accountant", posted="04/08/2026"),
+                job(2, "Harlow Group Ltd", "Management Accountant - Hybrid", posted="08/09/2026"),
+                job(3, "Harlow Group Ltd", "Management Accountant (Leeds)", posted="20/10/2026"),
+                job(4, "Northgate Foods", "Credit Controller")]
 AGENCY_ADS = [job(10 + i, "Aire Valley Recruitment", "Management Accountant") for i in range(3)] + \
              [job(20, "Pennine Finance Search", "Finance Manager")]
 

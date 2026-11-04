@@ -276,6 +276,13 @@ class OrderPatch(BaseModel):
     package: str | None = None
 
 
+class TerritoryIn(BaseModel):
+    industry: str
+    location: str
+    radius_miles: int = 20
+    keywords: list[str] | None = None
+
+
 class GoogleExchangeIn(BaseModel):
     code: str
     redirect_uri: str
@@ -1094,6 +1101,36 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         return Response(content="\ufeff" + csv_text, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename={name}.csv"})
 
+    # -- territories collected ahead of a sale -----------------------------------------------------
+    @app.get("/territories", dependencies=A)
+    def territories_ep():
+        return O.territories(db())
+
+    @app.post("/territories", dependencies=A, status_code=201)
+    def watch_ep(body: TerritoryIn, bg: BackgroundTasks, run: bool = True):
+        s = db()
+        try:
+            t = O.watch_territory(s, body.industry, body.location, body.radius_miles, body.keywords)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        if run:
+            bg.add_task(hooks.collect_one, s, settings, t["search_id"], s.create_run(t["search_id"]))
+        return t
+
+    @app.post("/territories/{search_id}/preview", dependencies=A, status_code=202)
+    def preview_ep(search_id: int, bg: BackgroundTasks):
+        s = db()
+        O.territory(s, search_id) or notfound("territory")
+        task_id = s.create_task("territory_preview", search_id)
+
+        def work():
+            try:
+                s.finish_task(task_id, "ok", O.preview_territory(s, search_id, order_tools(s)))
+            except Exception as exc:
+                s.finish_task(task_id, "error", error=str(exc))
+        bg.add_task(work)
+        return {"task_id": task_id, "status": "running"}
+
     # -- Google -------------------------------------------------------------------------------------
     @app.get("/google/status", dependencies=A)
     def google_status_ep():
@@ -1134,7 +1171,9 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     def toolbox(s: PgStore, bg: BackgroundTasks) -> AI.Toolbox:
         return AI.Toolbox(store=s, settings=settings, strict=strict(s), new_order=new_order,
                           start_fill=lambda oid, collect=True: bg.add_task(fill, oid, collect),
-                          order_out=lambda o: order_out(s, o), google=lambda: google_status(s))
+                          order_out=lambda o: order_out(s, o), google=lambda: google_status(s),
+                          start_collect=lambda sid: bg.add_task(hooks.collect_one, s, settings, sid, s.create_run(sid)),
+                          tools_for=lambda: order_tools(s))
 
     @app.post("/assistant/chat", dependencies=A)
     def assistant_chat(body: ChatIn, bg: BackgroundTasks):

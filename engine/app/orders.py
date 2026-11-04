@@ -237,3 +237,58 @@ def top_up_all(store, settings, sheets=None, strict: bool = True, claude=None, t
     for o in store.q("select id from lead_orders where status in ('collecting', 'waiting', 'error') order by id"):
         out.append(fill_order(store, settings, o["id"], sheets=sheets, strict=strict, claude=claude, tools=tools))
     return out
+
+
+# ---------------------------------------------------------------------------
+# territories collected ahead of a sale
+# ---------------------------------------------------------------------------
+def watch_territory(store, industry: str, location: str, radius_miles: int = 20,
+                    keywords: list[str] | None = None) -> dict:
+    """Start collecting an industry + town every morning before any agency buys it, so reposts are
+    already visible on the day an order comes in (an order for it reuses the same history)."""
+    industry, location = industry.strip(), location.strip()
+    if not (industry and location):
+        raise ValueError("industry and location are both needed")
+    label = f"{industry} - {location}"
+    s = store.one("select * from searches where lower(label) = lower(%s) order by id limit 1", (label,))
+    if s:
+        store.q("update searches set active = true where id = %s", (s["id"],))
+        return territory(store, s["id"])
+    s = store.one("insert into searches (label, keywords, location, radius_miles) values (%s, %s, %s, %s) returning id",
+                  (label, keywords_for(industry, keywords), location, radius_miles))
+    return territory(store, s["id"])
+
+
+TERRITORY_SQL = """
+    select s.id as search_id, s.label, s.location, s.radius_miles, s.active, s.last_run_at,
+      split_part(s.label, ' - ', 1) as industry,
+      (select a.name from client_territories t join clients c on c.id = t.client_id
+         join agencies a on a.id = c.agency_id where t.search_id = s.id limit 1) as owner,
+      (select count(*) from listing_searches ls join listings l on l.job_id = ls.job_id
+         where ls.search_id = s.id and l.posted_by = 'employer' and l.last_seen_at > now() - interval '14 days') as ads,
+      (select count(*) from hot_lead_searches hs join hot_leads h on h.lead_key = hs.lead_key
+         where hs.search_id = s.id and (h.posting_count_90d >= 2 or h.flagged_repost or h.archive_prior > 0)) as reposted_roles,
+      (select min(l.first_seen_at)::date from listing_searches ls join listings l on l.job_id = ls.job_id
+         where ls.search_id = s.id) as collecting_since
+    from searches s where position(' - ' in s.label) > 0"""
+
+
+def territory(store, search_id: int) -> dict | None:
+    return store.one(TERRITORY_SQL + " and s.id = %s", (search_id,))
+
+
+def territories(store) -> list[dict]:
+    return store.q(TERRITORY_SQL + " order by s.active desc, s.label")
+
+
+def preview_territory(store, search_id: int, tools: Tools, limit: int = 50) -> dict:
+    """How many leads would pass every check today, without sending anything (Haiku + Companies House only)."""
+    t = territory(store, search_id)
+    if t is None:
+        raise ValueError("territory not found")
+    fake = {"id": f"preview:{search_id}", "client_id": 0, "search_id": search_id, "industry": t["industry"],
+            "location": t["location"]}
+    quiet = Tools(claude=tools.claude, ch=tools.ch, reed=tools.reed)   # no Brave/Hunter spend on a preview
+    rows, stats = pick(store, fake, quiet, limit, strict=True)
+    return {"territory": t["label"], "ready": len(rows), "checked": stats,
+            "sample": [{k: r[k] for k in ("Company", "Role", "Times posted", "Why it's a lead")} for r in rows[:10]]}

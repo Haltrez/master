@@ -180,7 +180,7 @@ class ApifyIndeedClient:
     API = "https://api.apify.com/v2"
 
     def __init__(self, token: str, *, actor: str = "valig~indeed-jobs-scraper", max_items: int = 300,
-                 first_run_days: str = "14", daily_days: str = "3", transport=None, sleep=time.sleep,
+                 first_run_days: str = "", daily_days: str = "3", transport=None, sleep=time.sleep,
                  max_wait_s: int = 900):
         if not token:
             raise ReedError("APIFY_TOKEN not set")
@@ -209,7 +209,9 @@ class ApifyIndeedClient:
         return r.json()
 
     def pages(self, keyword: str, location: str, radius_miles: int, first_run: bool) -> Iterator[list[Job]]:
-        items = self._items({"country": "uk", "title": keyword, "location": location, "limit": self.max_items,
+        # First run: every live ad, old ones included (pairs old and new copies of a role); then the last 3 days.
+        items = self._items({"country": "uk", "title": keyword, "location": location,
+                             "limit": self.max_items * 2 if first_run else self.max_items,
                              "datePosted": self.first_run_days if first_run else self.daily_days})
         log.info("apify indeed kw=%r location=%r items=%d", keyword, location, len(items))
         jobs = []
@@ -228,5 +230,6 @@ class ApifyIndeedClient:
                             source_says_repost=bool(j.get("isRepost")), lat=loc.get("latitude"), lng=loc.get("longitude"),
                             raw={"key": j.get("key"), "title": j.get("title"), "employer": emp.get("name"),
                                  "city": loc.get("city"), "datePublished": j.get("datePublished"),
-                                 "isRepost": j.get("isRepost"), "website": emp.get("corporateWebsite")}))
+                                 "isRepost": j.get("isRepost"), "website": emp.get("corporateWebsite"),
+                                 "lat": loc.get("latitude"), "lng": loc.get("longitude")}))
         yield [x for x in jobs if x.employer_name and x.job_title]

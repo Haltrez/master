@@ -31,11 +31,9 @@ try {
   await page.waitForURL(/\/hot-leads/);
   check(true, "login works and returns to the page asked for");
 
-  // The fake Reed data is two copies live at once (not a repost), so count all signals for this test.
   await page.goto(BASE + "/settings");
   const reposts = page.getByRole("checkbox", { name: /Reposts only/ });
   check(await reposts.isChecked(), "Reposts only is on by default");
-  await reposts.uncheck();
   // No Companies House key in the test stack, so nothing can be verified: let unverified companies through.
   await page.getByRole("checkbox", { name: /Real companies only/ }).uncheck();
   await page.click("button:has-text('Save')");
@@ -115,6 +113,11 @@ try {
   await page.click("button:has-text('Create order & find leads')");
   await page.waitForSelector("[data-testid=order] >> text=Rival Recruitment");
   check(true, "deleting an order frees its industry + region");
+  await page.selectOption("select[aria-label='Territory industry']", "IT & Tech");
+  await page.fill("input[aria-label='Territory town']", "York");
+  await page.click("button:has-text('Start collecting')");
+  await page.waitForSelector("[data-testid=territory] >> text=IT & Tech - York");
+  check(true, "a territory can be collected before it's sold");
   await page.screenshot({ path: shots + "orders-desktop.png", fullPage: true });
 
   const phone = await browser.newPage({ ...playwright.devices["iPhone 13"], storageState: await page.context().storageState() });

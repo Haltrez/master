@@ -2,6 +2,7 @@ import { ErrorNote } from "@/components/ui";
 import { engineOr } from "@/lib/engine";
 import { Assistant } from "./home/assistant";
 import { Orders } from "./home/orders";
+import { Territories } from "./home/territories";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ g
       <ErrorNote error={orders.error && `Can't reach the engine: ${orders.error}`} />
       <Assistant enabled={!!settings.data?.assistant?.key_set} />
       <Orders initial={orders.data} industries={industries.data} google={settings.data?.google} />
+      <Territories industries={industries.data} />
     </div>
   );
 }

@@ -41,6 +41,10 @@ class Tools:
     reed: Any = None
     brave: Any = None
     hunter: Any = None
+    geocoder: Any = None
+
+
+AREA_SLACK = 1.25    # town centres are approximate: allow 25% over the radius
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +55,8 @@ def money(lo: Any, hi: Any) -> str:
     if not vals:
         return ""
     lo_v, hi_v = min(vals), max(vals)
+    if 1500 <= hi_v < 15000:
+        return ""    # a yearly figure this low is pro-rata or a board's estimate: leave it out rather than mislead
     if hi_v < 200:
         unit, fmt = "/hr", (lambda v: f"£{v:,.2f}".replace(".00", ""))
     elif hi_v < 1500:
@@ -85,6 +91,10 @@ def _as_date(v: Any) -> dt.date | None:
     return None
 
 
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def niche_words(industry: str) -> str:
     return industry.replace("&", "and").lower()
 
@@ -97,7 +107,7 @@ def _ads(store, job_ids: list[int]) -> dict[int, dict]:
         return {}
     return {r["job_id"]: r for r in store.q(
         """select job_id, source, title, employer_name, location_name, min_salary, max_salary, url, posted_date,
-                  first_seen_at, last_seen_at, description from listings where job_id = any(%s)""", (job_ids,))}
+                  first_seen_at, last_seen_at, description, raw from listings where job_id = any(%s)""", (job_ids,))}
 
 
 def _newest(ads: list[dict]) -> dict:
@@ -153,7 +163,28 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
     now = now or dt.datetime.now(dt.timezone.utc)
     search = store.search_row(order["search_id"]) or {}
     industry = IND.definition(order["industry"], list(search.get("keywords") or []))
-    stats = {"candidates": 0, "judged": 0, "not_judged": 0, "failed_haiku": 0, "failed_company_check": 0}
+    stats = {"candidates": 0, "outside_area": 0, "judged": 0, "not_judged": 0, "failed_haiku": 0,
+             "failed_company_check": 0}
+    center = None
+    radius = float(search.get("radius_miles") or order.get("radius_miles") or 20)
+    if tools.geocoder is not None:
+        p = tools.geocoder.geocode(search.get("location") or order.get("location"))
+        center = (p.lat, p.lng) if p else None
+
+    def in_area(ad: dict) -> bool:
+        """Boards like Indeed ignore the radius: check the ad's own place (unknown places are kept)."""
+        if center is None:
+            return True
+        from .geo import miles_between
+        raw = ad.get("raw") or {}
+        if raw.get("lat") is not None and raw.get("lng") is not None:
+            here = (float(raw["lat"]), float(raw["lng"]))
+        else:
+            p = tools.geocoder.geocode(ad.get("location_name"))
+            if p is None:
+                return True
+            here = (p.lat, p.lng)
+        return miles_between(center, here) <= radius * AREA_SLACK
     cands = candidates(store, order, now)
     stats["candidates"] = len(cands)
     good: dict[str, list[tuple[dict, Verdict, dict]]] = {}     # employer_norm -> passing roles
@@ -173,6 +204,10 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
             except Exception as exc:
                 log.warning("companies house check for %s failed: %s", lead["employer_name"], exc)
                 return False   # not cached as bad: tried again next time
+        unsure = c is not None and c.get("ch_company_type") in ("needs_review", "not_found")
+        if unsure and tools.ch is not None and tools.claude is not None \
+                and store.cache_get(f"chpick:{norm}", max_age_days=60) is None:
+            c = resolve_company(store, tools, lead, ad_text.get(norm, "")) or c
         if c:
             contacts[norm] = c
         if not (c and c.get("verified_company")):
@@ -181,6 +216,8 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
             return False
         return True
 
+    ad_text: dict[str, str] = {}
+    vetoed: set[str] = set()     # a company with any ad judged "not a direct employer" is out everywhere
     judged = 0
     for i in range(0, len(cands), CHUNK):
         if len(good) >= owed or judged >= MAX_JUDGED_PER_FILL:
@@ -192,6 +229,9 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
             ads = [all_ads[j] for j in (l.get("job_ids") or []) if j in all_ads]
             if ads:
                 ad = dict(_newest(ads))
+                if not in_area(ad):
+                    stats["outside_area"] += 1
+                    continue
                 ad["text"] = _full_text(store, tools, ad)
                 items.append((l, ad))
         verdicts = judge(store, tools.claude, industry, [
@@ -206,9 +246,13 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
                 stats["not_judged"] += 1
                 continue
             stats["judged"] += 1
-            if not v.ok:
+            if v.by == "haiku" and v.signals.get("direct_employer") is False:
+                vetoed.add(l["employer_norm"])
+                good.pop(l["employer_norm"], None)
+            if not v.ok or l["employer_norm"] in vetoed:
                 stats["failed_haiku"] += 1
                 continue
+            ad_text.setdefault(l["employer_norm"], ad["text"])
             if company_ok(l):
                 good.setdefault(l["employer_norm"], []).append((l, v, ad))
 
@@ -230,6 +274,25 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
     return rows, stats
 
 
+def resolve_company(store, tools: Tools, lead: dict, text: str) -> dict | None:
+    """Brand name vs registered name: let Haiku pick the record from the Companies House results."""
+    from .lead_contacts import verify_lead_company
+    from .qualify import pick_company
+    norm = lead["employer_norm"]
+    try:
+        items = tools.ch.search(lead["employer_name"]) or []
+        number = pick_company(tools.claude, lead["employer_name"], text, items)
+    except Exception as exc:
+        log.warning("company pick for %s failed: %s", lead["employer_name"], exc)
+        return None
+    store.cache_set(f"chpick:{norm}", {"number": number})
+    if not number:
+        return None
+    chosen = next(it for it in items if it.get("company_number") == number)
+    log.info("companies house: %s -> %s (%s) picked by Haiku", lead["employer_name"], chosen.get("title"), number)
+    return verify_lead_company(store, lead["employer_name"], norm, tools.ch, chosen=chosen)
+
+
 def build_row(store, order: dict, lead: dict, verdict: Verdict, ad: dict, also: list[str], contact: dict | None,
               now: dt.datetime) -> dict:
     from .lead_contacts import email_for_export
@@ -237,7 +300,8 @@ def build_row(store, order: dict, lead: dict, verdict: Verdict, ad: dict, also: 
     dates = sorted({d for d in (_as_date(x) for x in (lead.get("posting_dates") or [])) if d})
     first = dates[0] if dates else lead["first_seen_at"].date()
     n = max(int(lead["posting_count_90d"] or 1), len(dates))
-    why = [f"Advertised {n} separate times" + (f" ({', '.join(month(d) for d in dates)})" if len(dates) > 1 else "")]
+    why = [f"Advertised {n} separate times" + (f" ({_and([d.strftime('%d %b %Y').lstrip('0') for d in dates])})"
+                                                 if len(dates) > 1 else "")]
     if lead.get("flagged_repost"):
         why.append("the job board marks it as a repost")
     if (lead.get("archive_prior") or 0) > 0:

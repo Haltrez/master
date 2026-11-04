@@ -92,6 +92,47 @@ def _reposted(ls: list[Listing]) -> bool:
     return False
 
 
+_FILLER = {"and", "the", "of", "for", "to", "a", "an", "in", "with", "amp"}
+
+
+def _place_words() -> frozenset[str]:
+    from .normalise import POSTCODE_AREA_TOWN
+    words = {w for town in POSTCODE_AREA_TOWN.values() for w in town.split()}
+    words |= {"north", "south", "east", "west", "northern", "southern", "eastern", "western", "midlands", "central",
+              "scotland", "wales", "ireland", "england", "uk", "national", "region", "regional", "yorkshire", "lancashire",
+              "cheshire", "kent", "essex", "surrey", "sussex", "devon", "cornwall", "cumbria", "lincolnshire",
+              "humber", "anglia", "home", "counties", "greater"}
+    return frozenset(words - {"st", "the", "upon", "on", "le"})
+
+
+PLACE_WORDS = _place_words()
+
+
+def _tokens(title_norm: str) -> frozenset[str]:
+    return frozenset(t for t in title_norm.split() if t not in _FILLER)
+
+
+def canonical_titles(listings: list[Listing]) -> dict[tuple[str, str, str], str]:
+    """Same company + town: a title that is another title plus extra words is the same role reworded
+    ("sales executive" / "door to door sales executive"). Maps (employer, town, title) -> core title.
+    The core needs 2+ words, so "manager" never swallows "store manager" and "sales manager"."""
+    by_place: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for l in listings:
+        by_place[(l.employer_norm, l.location_norm or "")].add(l.title_norm)
+    out: dict[tuple[str, str, str], str] = {}
+    for (emp, loc), titles in by_place.items():
+        if len(titles) < 2:
+            continue
+        toks = {t: _tokens(t) for t in titles}
+        for t in titles:
+            # "area sales manager north east" is a different vacancy from "... cambridge": places never merge
+            cores = [c for c in titles if c != t and len(toks[c]) >= 2 and toks[c] < toks[t]
+                     and not ((toks[t] - toks[c]) & PLACE_WORDS)]
+            if cores:
+                out[(emp, loc, t)] = min(cores, key=lambda c: (len(toks[c]), c))
+    return out
+
+
 def posting_events(ls: list[Listing]) -> list[list[Listing]]:
     """Group a role's ads into distinct postings: a new posting starts when an ad opens 7+ days after the
     current posting started, or after every ad of the current posting was seen gone for 2+ days."""
@@ -121,10 +162,13 @@ def compute_hot_leads(
     reposts_only: hot only when the role was posted, ended and posted again (ours or archived)."""
     archive = archive or {}
     cutoff = now - dt.timedelta(days=lookback_days)
+    recent_ls = [l for l in listings if l.last_seen_at >= cutoff]
+    canon = canonical_titles(recent_ls)
     groups: dict[str, list[Listing]] = defaultdict(list)
-    for l in listings:
-        if l.last_seen_at >= cutoff:
-            groups[l.key].append(l)
+    for l in recent_ls:
+        loc = l.location_norm or ""
+        core = canon.get((l.employer_norm, loc, l.title_norm))
+        groups[lead_key(l.employer_norm, core, loc) if core else l.key].append(l)
 
     leads: list[dict[str, Any]] = []
     for key, ls in groups.items():
@@ -137,7 +181,8 @@ def compute_hot_leads(
             live_by_source[l.source].add(l.job_id)
         day_one = any(len(v) >= 2 for v in live_by_source.values())
         long_open = any((l.last_seen_at - l.opened()).days >= LONG_OPEN_DAYS for l in ls)
-        ev = archive.get(key) or {}
+        ev = max((archive.get(k) or {} for k in {key, *(x.key for x in ls)}),
+                 key=lambda e: int(e.get("prior_count") or 0))
         prior = int(ev.get("prior_count") or 0)
         count += prior
         flagged = any(l.source_says_repost for l in ls)
@@ -193,7 +238,8 @@ def compute_hot_leads(
     return leads
 
 
-def check_archive(store, listings: list[Listing], archive, now: dt.datetime, max_checks: int = 150) -> int:
+def check_archive(store, listings: list[Listing], archive, now: dt.datetime, max_checks: int = 150,
+                  priority=None) -> int:
     """Wayback lookups for live company+role groups not checked in 30 days (best-effort, capped)."""
     live: dict[str, Listing] = {}
     for l in listings:
@@ -202,7 +248,10 @@ def check_archive(store, listings: list[Listing], archive, now: dt.datetime, max
             if cur is None or l.first_seen_at < cur.first_seen_at:
                 live[l.key] = l
     fresh = store.archive_checked_since(now - dt.timedelta(days=30))
-    todo = [k for k in live if k not in fresh][:max_checks]
+    todo = [k for k in live if k not in fresh]
+    if priority is not None:   # roles in territories with an open order, matching its industry, go first
+        todo.sort(key=lambda k: -priority(live[k]))
+    todo = todo[:max_checks]
     for k in todo:
         l = live[k]
         first = min(l.opened(), l.first_seen_at).date()
@@ -215,13 +264,14 @@ def check_archive(store, listings: list[Listing], archive, now: dt.datetime, max
 
 def rebuild_hot_leads(store, *, threshold: int = 3, lookback_days: int = 90, reed=None,
                       max_detail_calls: int = 50, now: dt.datetime | None = None, archive=None,
-                      max_archive_checks: int = 150, reposts_only: bool = False) -> dict[str, int]:
+                      max_archive_checks: int = 150, reposts_only: bool = False,
+                      archive_priority=None) -> dict[str, int]:
     """Recompute hot_leads from the database. Keeps every status the owner set."""
     now = now or dt.datetime.now(dt.timezone.utc)
     rows = store.employer_listings_since(now - dt.timedelta(days=lookback_days))
     listings = [Listing(**r) for r in rows]
     if archive is not None:
-        check_archive(store, listings, archive, now, max_checks=max_archive_checks)
+        check_archive(store, listings, archive, now, max_checks=max_archive_checks, priority=archive_priority)
     evidence = store.archive_evidence_map() if hasattr(store, "archive_evidence_map") else {}
     leads = compute_hot_leads(listings, store.latest_run_starts(), now, threshold, lookback_days,
                               archive=evidence, reposts_only=reposts_only)

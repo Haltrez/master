@@ -94,4 +94,4 @@ def test_first_run_30_days_then_3(store):
     settings = Settings()
     run_search(s.id, repo=store, reed=None, settings=settings, adzuna=client(fake))
     run_search(s.id, repo=store, reed=None, settings=settings, adzuna=client(fake))
-    assert [r.url.params["max_days_old"] for r in fake.requests] == ["30", "3"]
+    assert [r.url.params["max_days_old"] for r in fake.requests] == ["90", "3"]

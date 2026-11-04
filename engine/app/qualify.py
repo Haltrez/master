@@ -89,7 +89,7 @@ def _ask(client, industry: dict, ads: list[dict]) -> dict[int, Verdict]:
               + "\n\nReturn one verdict per ad id.")
     resp = client.messages.create(
         model=MODEL, max_tokens=8000, system=SYSTEM,
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
+        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
         messages=[{"role": "user", "content": prompt}])
     if resp.stop_reason in ("refusal", "max_tokens"):
         raise RuntimeError(f"haiku stopped: {resp.stop_reason}")
@@ -155,3 +155,29 @@ def make_client(settings) -> Any:
         return None
     import anthropic
     return anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=3)
+
+
+PICK_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["company_number", "why"],
+               "properties": {"company_number": {"type": "string"}, "why": {"type": "string"}}}
+
+
+def pick_company(client, employer: str, ad_text: str, items: list[dict]) -> str | None:
+    """Which Companies House record is the employer behind this ad? Returns a company number or None.
+    Used only when the name match alone isn't sure (brands vs registered names: "ASDA" -> ASDA STORES LIMITED)."""
+    if client is None or not items:
+        return None
+    lines = "\n".join(
+        f"- {it.get('company_number')}: {it.get('title')} | {it.get('company_status')} | {it.get('company_type')} | "
+        f"{it.get('address_snippet') or ''} | created {it.get('date_of_creation') or '?'}" for it in items[:6])
+    prompt = (f"A UK job ad is from the employer \"{employer}\". Ad excerpt:\n{(ad_text or '')[:1200]}\n\n"
+              f"Companies House search results:\n{lines}\n\nWhich record is the company that employs people under "
+              "that name (the main UK trading company of the brand, not a dormant, dissolved or unrelated namesake)? "
+              "Answer with its company_number, or an empty string if none clearly is.")
+    resp = client.messages.create(
+        model=MODEL, max_tokens=1500, output_config={"effort": "low", "format": {"type": "json_schema", "schema": PICK_SCHEMA}},
+        messages=[{"role": "user", "content": prompt}])
+    if resp.stop_reason in ("refusal", "max_tokens"):
+        return None
+    text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+    number = (json.loads(text).get("company_number") or "").strip()
+    return number if any(it.get("company_number") == number for it in items) else None

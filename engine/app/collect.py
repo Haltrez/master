@@ -225,9 +225,12 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
             def do_reed():
                 for keyword in search.keywords:
                     for queried_as in ("employer", "agency"):
-                        for page in reed.iter_search_pages(keyword, search.location, search.radius_miles,
-                                                           search.min_salary, queried_as, budget=budget):  # type: ignore[arg-type]
+                        pages = reed.iter_search_pages(keyword, search.location, search.radius_miles,
+                                                       search.min_salary, queried_as, budget=budget)  # type: ignore[arg-type]
+                        for n, page in enumerate(pages):
                             store_page(page, queried_as, "reed", reed_known)  # type: ignore[arg-type]
+                            if queried_as == "agency" and n >= 1:
+                                break   # agency ads only feed the prospect list: 2 pages per keyword is plenty
             run_source("reed", do_reed)
 
         if adzuna is not None:
@@ -237,7 +240,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
                 for keyword in search.keywords:
                     for page in adzuna.iter_search_pages(keyword, search.location, search.radius_miles,
                                                          search.min_salary, budget=adz_budget,
-                                                         max_days_old=3 if seen_before else 30):
+                                                         max_days_old=3 if seen_before else 90):
                         store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", "adzuna", known)
                 mark_backfilled(flag)
             run_source("adzuna", do_adzuna)

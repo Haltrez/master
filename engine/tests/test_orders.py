@@ -367,3 +367,18 @@ def test_delete_keeps_the_client_while_it_has_other_orders(store):
     import pytest as _p
     with _p.raises(TerritoryTaken):
         make(store, agency_name="Other Agency")
+
+
+def test_territories_collected_before_a_sale_and_reused_by_the_order(store):
+    t = O.watch_territory(store, "IT & Tech", "York")
+    assert t["label"] == "IT & Tech - York" and t["owner"] is None
+    assert [x["label"] for x in O.territories(store)] == ["IT & Tech - York"]
+    o = O.create_order(store, agency_name="Acme", industry="IT & Tech", location="York", leads_wanted=5)
+    assert o["search_id"] == t["search_id"] and O.territory(store, t["search_id"])["owner"] == "Acme"
+
+
+def test_territories_api(store, api_with):
+    c = api_with()
+    r = c.post("/territories", headers=H, json={"industry": "Legal", "location": "Bath"})
+    assert r.status_code == 201, r.text
+    assert c.runs and [t["label"] for t in c.get("/territories", headers=H).json()] == ["Legal - Bath"]

@@ -73,6 +73,17 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Change an order: number of leads, frequency, client email, or pause / resume it.",
      "input_schema": _obj({"order_id": I, "leads_wanted": I, "frequency": {"type": "string", "enum": ["once", "weekly"]},
                            "client_email": S, "paused": B}, ["order_id"])},
+    {"name": "watch_territory", "strict": True,
+     "description": "Start collecting an industry + town every morning before it's sold, so reposts build up and "
+                    "an order for it later starts with history. Collection starts straight away.",
+     "input_schema": _obj({"industry": S, "location": S, "radius_miles": I}, ["industry", "location"])},
+    {"name": "list_territories", "strict": True,
+     "description": "Every industry + town being collected: owner agency (if sold), ads seen, reposted roles found.",
+     "input_schema": _obj({}, [])},
+    {"name": "preview_territory", "strict": True,
+     "description": "How many leads in a territory would pass every check today (Claude reads each ad, Companies "
+                    "House), with a sample. Sends nothing. Takes up to a minute. Use before pitching an agency.",
+     "input_schema": _obj({"search_id": I}, ["search_id"])},
     {"name": "delete_order", "strict": True,
      "description": "Delete an order and its sent-lead records, freeing its industry + region for another agency. "
                     "Only after the owner has clearly confirmed deleting that specific order.",
@@ -112,6 +123,8 @@ class Toolbox:
     start_fill: Callable[..., Any]
     order_out: Callable[[dict], dict]
     google: Callable[[], dict]
+    start_collect: Callable[[int], Any] | None = None
+    tools_for: Callable[[], Any] | None = None
 
     def _order_brief(self, o: dict) -> dict:
         o = self.order_out(o)
@@ -159,6 +172,15 @@ class Toolbox:
                 s._update("lead_orders", o["id"], {"status": "waiting"})
                 self.start_fill(o["id"], False)
             return self._order_brief(O.get_order(s, a["order_id"]))
+        if name == "watch_territory":
+            t = O.watch_territory(s, a["industry"], a["location"], a.get("radius_miles") or 20)
+            if self.start_collect:
+                self.start_collect(t["search_id"])
+            return {"territory": t, "note": "collecting now and every morning"}
+        if name == "list_territories":
+            return O.territories(s)
+        if name == "preview_territory":
+            return O.preview_territory(s, a["search_id"], self.tools_for())
         if name == "delete_order":
             return {"deleted": O.delete_order(s, a["order_id"])}
         if name == "list_industries":

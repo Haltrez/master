@@ -35,11 +35,12 @@ def pick_hunter_person(people: list[dict]) -> dict | None:
     return valid[0]
 
 
-def verify_lead_company(store, employer_name: str, employer_norm: str, ch) -> dict[str, Any]:
-    """Companies House check: real active company? recruitment SIC code? Stores the result."""
+def verify_lead_company(store, employer_name: str, employer_norm: str, ch, chosen: dict | None = None) -> dict[str, Any]:
+    """Companies House check: real active company? recruitment SIC code? Stores the result.
+    chosen: a search result picked by Claude when the name match alone wasn't sure."""
     row: dict[str, Any] = {"employer_norm": employer_norm, "company_name": employer_name, "verified_company": False,
                            "is_agency": False}
-    best, conf = best_match(employer_name, ch.search(employer_name))
+    best, conf = (chosen, 1.0) if chosen else best_match(employer_name, ch.search(employer_name))
     row["ch_match_confidence"] = conf
     if best is None:
         row["ch_company_type"] = "not_found"
@@ -64,7 +65,13 @@ def verify_lead_company(store, employer_name: str, employer_norm: str, ch) -> di
 
 def enrich_lead_company(store, employer_name: str, employer_norm: str, ch, brave=None, hunter=None) -> dict[str, Any]:
     """Verify on Companies House, then (real companies only) find the decision maker and email."""
-    row = verify_lead_company(store, employer_name, employer_norm, ch)
+    existing = store.lead_contacts_for([employer_norm]).get(employer_norm)
+    if existing and existing.get("verified_company") and existing.get("ch_company_number"):
+        row = {k: existing.get(k) for k in ("employer_norm", "company_name", "ch_company_number", "ch_company_type",
+                                            "ch_match_confidence", "company_status", "sic_codes", "is_agency",
+                                            "verified_company")}   # keep a match already made (e.g. picked by Claude)
+    else:
+        row = verify_lead_company(store, employer_name, employer_norm, ch)
     if not row["verified_company"]:
         return row
     directors: list[tuple[str, str, str]] = []
@@ -72,7 +79,9 @@ def enrich_lead_company(store, employer_name: str, employer_norm: str, ch, brave
         full, first, last = parse_officer_name(o.get("name", ""))
         if full:
             directors.append((full, first, last))
-    if directors:
+    # A director is the hiring decision maker at a small or mid-sized firm. At a big company (many directors)
+    # a board member is no use to an agency: leave it to Hunter's hiring/HR person.
+    if directors and len(directors) <= 4:
         row.update(contact_name=directors[0][0], contact_first_name=directors[0][1], contact_role="Director")
 
     domain = ""
@@ -139,13 +148,7 @@ def enrich_new_lead_companies(store, settings, limit: int | None = None) -> dict
             agencies += r["is_agency"]
         except Exception as exc:  # one bad company never stops the rest
             log.warning("companies house check for %s failed: %s", lead["employer_name"], exc)
-    # 2) Decision maker + email (Brave/Hunter credits): only companies about to go into an open order
-    for lead in store.lead_companies_needing_contacts(limit):
-        try:
-            enrich_lead_company(store, lead["employer_name"], lead["employer_norm"], ch, brave, hunter)
-            contacts += 1
-        except Exception as exc:
-            log.warning("lead contact for %s failed: %s", lead["employer_name"], exc)
+    # Decision makers are looked up only for rows actually going to a client (leadgen.pick).
     return {"verified": verified, "agencies_removed": agencies, "contacts": contacts}
 
 
