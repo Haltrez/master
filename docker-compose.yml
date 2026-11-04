@@ -1,0 +1,90 @@
+# Repost Radar on one server (e.g. Hetzner). See README "Deploy on Hetzner".
+#   docker compose up -d --build
+# Optional built-in daily collection without Make.com:
+#   docker compose --profile scheduler up -d
+# Database backup to ./backups:
+#   docker compose --profile backup run --rm backup
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: repostradar
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d repostradar"]
+      interval: 5s
+      retries: 20
+
+  migrate:
+    image: postgres:16-alpine
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/repostradar}
+      SUPABASE: ${SUPABASE:-0}
+    volumes:
+      - ./supabase:/work/supabase:ro
+      - ./scripts:/work/scripts:ro
+    entrypoint: ["sh", "/work/scripts/migrate.sh"]
+    restart: "no"
+
+  engine:
+    build: ./engine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/repostradar}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  crm:
+    build: ./crm
+    restart: unless-stopped
+    environment:
+      ENGINE_URL: http://engine:8000
+      ENGINE_API_SECRET: ${ENGINE_API_SECRET:?set ENGINE_API_SECRET in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      CRM_PASSWORD_HASH: ${CRM_PASSWORD_HASH:-}
+      CRM_PASSWORD: ${CRM_PASSWORD:-}
+    depends_on: [engine]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      CRM_DOMAIN: ${CRM_DOMAIN:?set CRM_DOMAIN in .env}
+      ENGINE_DOMAIN: ${ENGINE_DOMAIN:?set ENGINE_DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [crm, engine]
+
+  scheduler:
+    build: ./engine
+    profiles: ["scheduler"]
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/repostradar}
+    command: ["python", "-m", "app.scheduler"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  backup:
+    image: postgres:16-alpine
+    profiles: ["backup"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["sh", "-c", "pg_dump -h db -U postgres -Fc repostradar > /backups/repostradar-$$(date +%F).dump && echo saved"]
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

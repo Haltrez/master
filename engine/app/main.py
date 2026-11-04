@@ -33,6 +33,13 @@ log = logging.getLogger("api")
 UK = ZoneInfo("Europe/London")
 
 
+def sheet_id(url: str | None) -> str | None:
+    """https://docs.google.com/spreadsheets/d/<ID>/edit -> <ID> (what Make.com's Sheets modules want)."""
+    import re
+    m = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", url or "")
+    return m.group(1) if m else None
+
+
 def uk_today() -> dt.date:
     return dt.datetime.now(UK).date()
 
@@ -517,6 +524,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.get("/clients/active", dependencies=A)
     def clients_active():
         return [{"id": c["id"], "agency": c["agency_name"], "plan": c["plan"], "sheet_url": c["sheet_url"],
+                 "sheet_id": sheet_id(c["sheet_url"]),
                  "delivery_email": c["delivery_email"], "territories": c["territories"]}
                 for c in db().clients(active_only=True)]
 
@@ -587,6 +595,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                         "ad_link": l["latest_url"], "score": l["score"],
                         "suggested_opener": opener_for_lead(tmpl, l, niche, city)})
         return {"client_id": client_id, "agency": c["agency_name"], "sheet_url": c["sheet_url"],
+                "sheet_id": sheet_id(c["sheet_url"]),
                 "delivery_email": c["delivery_email"], "count": len(out), "leads": out}
 
     # -- exports ---------------------------------------------------------------------------------
@@ -792,7 +801,9 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     def matches(agency_id: int, brief_id: int | None = None, min_score: int | None = None, status: str | None = None):
         s = db()
         ids = [brief_id] if brief_id else [b["id"] for b in s.briefs(agency_id)]
-        return s.matches_detail(ids, min_score, status)
+        return [{**m, "link": (m["url"] or "").split("#")[0],
+                 "location": m["location_label"] or m["location_text"] or m["town"] or ""}
+                for m in s.matches_detail(ids, min_score, status)]
 
     @app.post("/matches/status", dependencies=A)
     def match_status(body: MatchStatusIn):

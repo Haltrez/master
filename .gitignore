@@ -11,3 +11,5 @@ node_modules/
 .role_match_local.json
 .role_match_local.tmp
 matches.csv
+backups/
+crm/e2e/screens/

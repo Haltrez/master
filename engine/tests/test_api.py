@@ -163,6 +163,7 @@ def test_daily_leads_never_returns_the_same_lead_twice(api, store):
     assert store.get_agency(a["id"])["stage"] == "pilot"
     active = api.get("/clients/active", headers=H).json()
     assert active[0]["sheet_url"].endswith("/abc") and active[0]["territories"][0]["search_id"] == 1
+    assert active[0]["sheet_id"] == "abc"
     peek = api.get(f"/clients/{c['id']}/daily-leads", headers=H).json()
     assert peek["count"] == 3                                    # without mark: nothing recorded
     day1 = api.get(f"/clients/{c['id']}/daily-leads", headers=H, params={"mark": True}).json()
@@ -357,6 +358,7 @@ def test_role_match_endpoints(api, store, calls):
                         "location_label": "Warrington (company base)"})
     ms = api.get(f"/agencies/{a['id']}/matches", headers=H).json()
     assert ms[0]["company"] == "Acme M&E" and ms[0]["signal"] == "Live on their careers page"
+    assert ms[0]["link"] == "https://acme.example/j1" and ms[0]["location"] == "Warrington (company base)"
     assert api.post("/matches/status", headers=H, json={"ids": [ms[0]["id"]], "status": "sent"}).json() == {"updated": 1}
     csv_text = api.get("/exports/matches.csv", headers=H, params={"agency_id": a["id"]}).text
     rows = list(csv.reader(io.StringIO(csv_text)))

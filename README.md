@@ -1,254 +1,220 @@
 # Repost Radar
 
-SmartEmploy's internal lead engine and CRM. The full spec is in
-[`BUILD_PROMPT.md`](BUILD_PROMPT.md). It's being built one phase at a time.
+SmartEmploy's lead engine and CRM for UK recruitment agencies.
 
-| Phase | What | Status |
-|---|---|---|
-| 1 | Reed API collector | **built, waiting for a real-key check** |
-| 2.5 | Role Match MVP (CLI) | **built, ran live against the 3 seed employers** |
-| 2 | Repost detection, normalisation, scoring | not started |
-| 3 | Prospect agencies + Companies House | not started |
-| 4 | FastAPI endpoints | not started |
-| 5 | CRM (Next.js) | not started |
-| 6 | Make.com + Google Sheets | not started |
+- **Hot leads.** Companies that keep reposting the same role, or keep an ad
+  open for weeks, can't fill it. Those companies are leads for an agency.
+- **Prospect agencies.** Agencies advertising in a niche and region are who
+  you sell to. Companies House confirms each one is a real company and gives
+  you its directors' names.
+- **Role Match.** An agency has candidates waiting. You enter the roles and
+  towns, with no names or CVs, and Role Match finds direct employers hiring
+  those roles nearby.
+- **The CRM** (password login). It has a Today page with the 100-a-day
+  target, the pipeline, ready-to-send drafts, clients with exclusive
+  territories (one agency per niche and region), and Ctrl/Cmd+K search.
+- **Make.com** runs the daily schedule and fills each client's Google Sheet.
 
-## Repo layout (so far)
+The full spec is in [`BUILD_PROMPT.md`](BUILD_PROMPT.md).
 
 ```
-engine/
-  app/
-    config.py        settings from env vars (.env supported)
-    db.py            Supabase REST access (service role, server only) + in-memory repo for tests
-    reed_client.py   Reed API client: paging, throttle, retry, call cap, redacted logs
-    normalise.py     employer/title/location cleaning (Phase 2 hardens it)
-    collect.py       run_search / run_all
-  cli.py             command line
-  tests/             pytest suite + fixtures/
-  requirements.txt
-supabase/
-  migrations/001_init.sql     schema + Row Level Security
-  migrations/002_collect.sql  upsert_listings() used by the collector
-  seed.sql                    the 5 outreach templates
-  tests/                      SQL checks run against a throwaway local Postgres
-.env.example
+engine/      Python engine: collectors, detection, enrichment, Role Match, API (FastAPI)
+crm/         Next.js CRM (the face of the system)
+supabase/    SQL migrations + seeds (works on Supabase or plain Postgres)
+make/        SCENARIOS.md: step-by-step Make.com build notes
+deploy/      Caddyfile (automatic HTTPS)
+scripts/     migrate.sh (applies the SQL once each)
+docker-compose.yml   everything on one server
 ```
 
-## Phase 1: set up and run the collector locally
+## How it fits together
 
-You need Python 3.12, a Reed API key and a Supabase project.
+```
+Make.com (06:00 daily, 08:00 client delivery, 07:30 Riga digest)
+        │  HTTPS + X-API-Key
+        ▼
+Reed API ─┐                      ┌── CRM (password login) ── you
+Adzuna ───┼─► engine (FastAPI) ◄─┘      browser never sees the engine secret
+Companies House, Brave, Hunter ┘   │
+Employer careers pages (polite)    ▼
+                                Postgres
+```
 
-### 1. Get a Reed API key
+## Deploy on Hetzner (about 30 minutes)
 
-Sign up at <https://www.reed.co.uk/developers/jobseeker>. The key arrives by
-email.
+You need a Hetzner Cloud server (CX22 or bigger, Ubuntu 24.04) and a domain
+where you can add DNS records.
 
-### 2. Create the Supabase project and database
+1. **DNS.** Add two A records pointing at the server's IP address:
+   `crm.yourdomain` and `api.yourdomain`.
+2. **Install Docker on the server.** SSH in as root, then:
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   ```
+3. **Get the code.**
+   ```bash
+   git clone <this repo> /opt/repost-radar && cd /opt/repost-radar
+   ```
+4. **Configure it.**
+   ```bash
+   cp .env.example .env
+   nano .env
+   ```
+   Fill in:
+   - `CRM_DOMAIN` and `ENGINE_DOMAIN`
+   - `POSTGRES_PASSWORD`, `SESSION_SECRET` and `ENGINE_API_SECRET`. Make each
+     one with `openssl rand -hex 32`.
+   - `CRM_PASSWORD`: the password you'll log in with
+   - `REED_API_KEY` and `COMPANIES_HOUSE_API_KEY`, plus `ADZUNA_*`,
+     `BRAVE_API_KEY` and `HUNTER_API_KEY` if you have them
 
-1. Create a project at <https://supabase.com> (pick the London region).
-2. Open **SQL Editor**, paste the contents of each file below, and click
-   **Run**, in this order:
-   1. `supabase/migrations/001_init.sql`
-   2. `supabase/migrations/002_collect.sql`
-   3. `supabase/seed.sql`
-3. Open **Project Settings → API** and copy the **Project URL** and the
-   **service_role** key. The service_role key bypasses all security, so it
-   only ever goes in the engine's `.env` and never in the browser or the CRM.
+   Keys never go in the code. They live only in this `.env` file.
+5. **Start it.**
+   ```bash
+   docker compose up -d --build
+   ```
+   The first build takes a few minutes. The database is created and migrated
+   automatically. Caddy gets HTTPS certificates on its own.
+6. **Open `https://crm.yourdomain`** and log in.
+7. **Make.com.** Build the scenarios in [`make/SCENARIOS.md`](make/SCENARIOS.md),
+   using `https://api.yourdomain` as `ENGINE_URL`.
 
-### 3. Configure
-
-From the repo root:
-
+**Updating later:**
 ```bash
-cp .env.example .env
+cd /opt/repost-radar && git pull && docker compose up -d --build
 ```
+New migrations apply automatically.
 
-Fill in `REED_API_KEY`, `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
-`.env` is git-ignored, so don't commit it.
-
-### 4. Install
-
+**Backups:**
 ```bash
-cd engine
-python3.12 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+docker compose --profile backup run --rm backup
+```
+This writes `backups/repostradar-<date>.dump`. Copy it off the server, or add
+the command to cron.
+
+**Without Make.com:**
+```bash
+docker compose --profile scheduler up -d
+```
+This runs the daily collection at 06:00 UK from the server itself.
+
+**Using Supabase instead of the built-in Postgres:** set `DATABASE_URL` to
+Supabase's connection string and `SUPABASE=1` in `.env`. Everything else is
+the same.
+
+**A stronger login:** run `cd crm && npm run hash-password -- 'your password'`
+and put the result in `CRM_PASSWORD_HASH` instead of `CRM_PASSWORD`. Failed
+logins are limited to 10 per 15 minutes per IP.
+
+## Daily use
+
+1. **Searches.** Add one per niche and region, for example
+   "Accountancy - Leeds" with keywords like management accountant and finance
+   manager. Click **Run now**, or let Make run them at 06:00.
+2. **Hot leads** fill in as roles repost. A lead is hot when any of these
+   is true:
+   - the same role is posted 3+ times in 90 days
+   - one ad stays open for 30+ days (Reed's own posted date counts, so this
+     works from day one)
+   - two copies run at once
+
+   Agency ads never count. Neither do the same ad on Reed and Adzuna.
+3. **Agencies** fill in from agency ads in each niche. Click **Companies
+   House** on an agency to confirm it's a Ltd, LLP or PLC and add its
+   directors. With Brave and Hunter keys set, it also finds the website and
+   verified emails. Only emails Hunter marks "valid" count as verified.
+4. **Today.** Open an agency from **Do next**, pick a template, **Copy**, send
+   it, then **Log as sent**. Every email, call, LinkedIn DM and LinkedIn
+   connect counts toward the 100.
+5. **An agency replies with candidates.** Open **Role Match**, or the agency's
+   **Candidates** tab, add a brief per role and town, then click **Find
+   matches**. You can download the CSV or send it to their Google Sheet.
+6. **Pilot.** Drag the agency to Pilot, pick its exclusive territories, and
+   Make creates and fills its sheet every weekday.
+
+## Rules built in
+
+- **Official APIs only:** Reed, Adzuna, Companies House, postcodes.io, the
+  Wayback Machine, Brave and Hunter. Job boards are never scraped.
+- **Careers pages:** Role Match reads employers' **own** careers pages
+  politely:
+  - robots.txt is checked first
+  - user agent `SmartEmployBot/1.0`
+  - at most 1 request every 5 seconds per site, and 3 pages per employer
+  - each employer is checked at most once a day
+- **Email outreach** only goes to agencies confirmed on Companies House as
+  Ltd, LLP or PLC with a trusted name match. "Not found" never counts as
+  allowed.
+- **Do not contact** and **Forget** are permanent. The email goes onto a
+  suppression list (only a hash of it is kept) that every draft, export and
+  Make flow respects.
+- **Every email template** carries the sender footer and an opt-out line.
+- **No candidate data.** Role Match briefs are role profiles only. The brief
+  importer rejects fields like name, email, CV or salary.
+- **Secrets:**
+  - Keys stay in `.env` and are masked in logs.
+  - The CRM talks to the engine server-side, so the engine secret never
+    reaches the browser.
+  - Every engine endpoint requires `X-API-Key`.
+
+## Developing locally
+
+**Engine** (Python 3.12):
+```bash
+cd engine && python3.12 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 5. Save a real Reed response as the test fixture
-
-```bash
-python cli.py reed-sample --keywords "management accountant" --location Leeds
-```
-
-This makes one API call, overwrites `tests/fixtures/reed_search_sample.json`
-(the committed one is a synthetic placeholder), and prints every field name
-Reed actually returned. If the names differ from the ones in
-`app/reed_client.py` (`ReedJob`), the model needs adjusting.
-
-### 6. Add a search and run it
-
-```bash
-python cli.py add-search --label "Accountancy - Leeds" \
-  --keywords "management accountant,financial accountant,finance manager,credit controller" \
-  --location Leeds --radius 15
-python cli.py run --search-id 1
-python cli.py run-all            # every active search, one after another
-```
-
-A run prints its counts, for example:
-
-```
-run 1 (search 1): ok
-  api_calls=9 listings_seen=412 new_listings=412
-  employer=158 agency=254 reclassified=6
-```
-
-Each keyword is queried twice, once for direct employers and once for
-agencies, and each query pages 100 results at a time. The run is capped at
-`REED_MAX_CALLS_PER_RUN` calls (default 300). If it hits the cap, the run is
-marked `error`, but every listing fetched up to that point is kept.
-
-### 7. Check the Phase 1 acceptance criteria in Supabase
-
-Run these in the SQL Editor after two runs of the same search:
-
-```sql
--- run rows and counts
-select id, status, api_calls, listings_seen, new_listings, error from runs order by id;
-
--- no duplicates (should return 0 rows), and last_seen_at moved
-select job_id, count(*) from listings group by 1 having count(*) > 1;
-select count(*) filter (where last_seen_at > first_seen_at) as seen_again, count(*) from listings;
-
--- employer vs agency split
-select posted_by, count(*) from listings group by 1;
-```
-
-To force a company to count as an agency (or as an employer), add an override.
-It applies from the next run:
-
-```sql
-insert into employer_overrides (employer_norm, is_agency) values ('harlow group', true);
-```
-
-`employer_norm` is the lowercased name with punctuation and Ltd/Limited/PLC/LLP
-removed.
-
-### Tests
-
-```bash
-cd engine
 pytest -q
 ```
+The engine has 202 tests. They run against a throwaway Postgres if Postgres
+server binaries are installed; set `PG_BIN` or `TEST_DATABASE_URL` to point
+at yours.
 
-The suite covers paging, throttling, retry, the call cap, key redaction,
-upsert and dedupe, posted_by classification and overrides. `test_sql.py` also
-spins up a throwaway local Postgres, applies the migrations and seed, and checks
-the upsert SQL, RLS and territory exclusivity. It is skipped automatically if
-Postgres server binaries aren't installed. You can run it on its own with
-`supabase/tests/run_local.sh`.
-
-## Phase 2.5: Role Match (CLI)
-
-Role Match finds **direct employers currently hiring the roles an agency's
-candidates do**, and ranks them by how stuck the employers look. A *candidate
-brief* is a role profile only: role, location, radius, sector keywords and
-seniority. It never holds names, CVs, contact details or salaries. The brief
-file rejects keys like `name`, `email` or `salary`.
-
-### Run it
-
+Useful CLI commands (they need `DATABASE_URL` in `.env`):
 ```bash
-cd engine
-source .venv/bin/activate && pip install -r requirements.txt    # adds PyYAML
-python cli.py brief import ../briefs.example.yaml                # the six MCM briefs
-python cli.py employers check --all                              # careers pages + ATS boards, politely
+python cli.py add-search --label "Accountancy - Leeds" --keywords "management accountant,finance manager" --location Leeds
+python cli.py run --search-id 1        # collect, then rebuild hot leads and agencies
+python cli.py hot-leads --top 20
+python cli.py agencies --search-id 1
+python cli.py enrich --all-new         # Companies House (+ Brave/Hunter if keys set)
+python cli.py brief import ../briefs.example.yaml
+python cli.py employers check --all
 python cli.py match --agency "MCM Recruitment Solutions" --out matches.csv
+python cli.py reed-sample              # save a real Reed response as a test fixture
 ```
+Without `DATABASE_URL`, the Role Match commands use a local JSON file.
 
-Other commands:
-
+**API:**
 ```bash
-python cli.py brief add --agency "MCM Recruitment Solutions" --role "Electrical Estimator" --location Warrington --radius 30
-python cli.py brief list --agency "MCM Recruitment Solutions"
-python cli.py employers add --name "Acme M&E Ltd" --careers-url https://acme.example/careers --town Bolton
-python cli.py employers list [--status research]
-python cli.py employers check --id 3 [--force]        # --force skips the weekly schedule, never the once-a-day limit
-python cli.py employers import-ch --location Manchester  # Companies House SIC search -> research queue
-python cli.py match --agency "..." --check --no-reed      # check due employers first; skip Reed
+uvicorn app.main:app --reload
+```
+Set `ENABLE_DOCS=1` to see the interactive docs at `/docs`.
+
+**CRM** (Node 22):
+```bash
+cd crm && npm install
+ENGINE_URL=http://localhost:8000 ENGINE_API_SECRET=... SESSION_SECRET=$(openssl rand -hex 32) CRM_PASSWORD=dev npm run dev
 ```
 
-**Where data goes:** if `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set,
-Role Match uses Supabase. In that case run `supabase/migrations/003_role_match.sql`
-and then `supabase/seed_role_match.sql` in the SQL editor first. Otherwise it
-uses a local file, `engine/.role_match_local.json` (git-ignored), which comes
-seeded with the role families and the three seed employers. You can force one
-or the other with `python cli.py --store local|supabase ...`.
+**Full-stack smoke test.** This starts a throwaway Postgres, a fake Reed, the
+engine and the CRM, then drives it with Playwright:
+```bash
+cd crm && npm run build && python3 -I e2e/stack.py
+```
 
-### Sources, in order of trust
+## Source notes
 
-1. **Employer careers pages.** The extractor reads JSON-LD `JobPosting` data
-   when a page has it. Otherwise it finds job-title-shaped headings and labels
-   and pairs each with its own link (Apply button, job page, or .docx advert).
-   Bullet lists of "roles we're always looking for" with no links are ignored.
-   So are named people, such as staff profiles.
-2. **ATS job boards** with documented, public, keyless APIs:
-   - Greenhouse (`boards-api.greenhouse.io/v1/boards/{token}/jobs`)
-   - Lever (`api.lever.co/v0/postings/{site}?mode=json`)
-   - Ashby (`api.ashbyhq.com/posting-api/job-board/{name}`)
-
-   Breathe HR's API needs the company's own key, so Breathe vacancies are read
-   from the careers page and Breathe's public `/v/` pages.
-3. **Reed API, direct employers only.** This needs `REED_API_KEY`. Reed is
-   searched for each exact title in the role family, at 1.5× the brief's
-   radius. Direct employers become matches and join the directory as
-   `research` rows. Agency ads, including employer-query results whose names
-   look like agencies, are never matches. They're counted as **market demand**.
-4. **Wayback Machine CDX.** This gives the earliest capture of each matched
-   job URL, cached for 30 days. With no capture, the report says `unknown`.
-   It never guesses.
-
-### Polite fetching (enforced in `app/polite.py`, tested in `tests/test_polite.py`)
-
-- robots.txt is checked with `urllib.robotparser` before every domain. Rules
-  are ordered so the longest match wins, per RFC 9309. A disallowed careers
-  page marks the employer `blocked_by_robots`.
-- User agent `SmartEmployBot/1.0 (+https://smartemploy.io/bot)`.
-- At most 1 request per 5 seconds per domain, robots.txt requests included.
-- At most 3 pages per employer per check: the careers page plus up to 2 job
-  pages.
-- Each employer is checked at most once a day, and weekly by default.
-- Job boards (Indeed, Totaljobs, CV-Library, LinkedIn, Reed web pages, …) are
-  refused outright.
-- Pages that only work with JavaScript are marked `needs_manual`. There is no
-  headless browser.
-- Per job, only the title, location text, URL, first/last seen, a hash of the
-  page text, the employer's own posted date and which sector keywords appear
-  are stored. Page text, names and emails are never stored.
-
-### matches.csv
-
-The columns are `candidate_role, company, their_open_role, location,
-distance_miles, open_since, signal, link, source, score`. Rows are sorted by
-candidate role, then score. A market-demand row per role follows the matches.
-When an ad doesn't state a location, the company's base town is used and
-labelled `(company base)`.
-
-Scoring follows the spec table: exact +4, related +2, within radius +2
-(within 1.5× +1, further out is excluded), open 30+ days +2, reposted on Reed
-+2, 2+ roles in the family at one employer +1, sector keyword +1, probably
-filled −3.
-
-## Rules this codebase follows
-
-- Official APIs only, with one exception added in Phase 2.5: employers' own
-  careers pages and ATS boards, fetched under the polite rules above. Job
-  boards are never scraped.
-- No candidate or job-seeker data.
-- Secrets only in env vars. Keys are never logged: the Reed key travels in the
-  Basic-auth header, httpx's own request logging is silenced, and a log filter
-  masks any configured secret.
-- Row Level Security is on for every table. After your first CRM login
-  (Phase 5), add yourself as the owner:
-  `insert into app_users (user_id, email) select id, email from auth.users where email = 'you@example.com';`
+- **Reed:** HTTP Basic with the key as username. Search runs once for direct
+  employers and once for agencies, with pages of 100, 1 request per second, up
+  to 5 retries with backoff, and a cap of 300 calls per run.
+- **Adzuna:** a second UK source that aggregates many job boards. Adzuna's
+  terms ask for "Jobs by Adzuna" attribution and use of its links. It doesn't
+  say who is an agency, so ads are classified by overrides, by agencies Reed
+  has already identified, by big agency brands, and by agency words in the
+  name.
+- **Companies House:** search, profile and officers, cached for 30 days. A
+  match below 0.85 confidence is flagged for review and never trusted.
+- **Wayback Machine:** gives an "open since" date for matched job pages.
+  Where it has no capture, the report shows "unknown".
+- **ATS job boards** read through their public APIs: Greenhouse, Lever and
+  Ashby. Breathe HR has no public API, so its vacancy pages are read from the
+  employer's careers page.
