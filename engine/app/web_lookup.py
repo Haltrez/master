@@ -130,3 +130,25 @@ class Hunter:
             return empty
         status = (d.get("verification") or {}).get("status") or "unknown"
         return {"email": email, "status": status, "score": d.get("score") or 0, "verified": status == "valid"}
+
+    def domain_people(self, domain: str, department: str = "hr", limit: int = 10) -> list[dict[str, Any]]:
+        """People Hunter knows at a domain in one department (hr, executive, management...)."""
+        if not domain:
+            return []
+        try:
+            r = self._http.get("https://api.hunter.io/v2/domain-search",
+                               params={"api_key": self.api_key, "domain": domain, "department": department,
+                                       "type": "personal", "limit": limit})
+        except httpx.HTTPError as exc:
+            log.warning("hunter domain search failed: %s", type(exc).__name__)
+            return []
+        log.info("hunter domain-search domain=%s department=%s status=%d", domain, department, r.status_code)
+        if r.status_code != 200:
+            return []
+        out = []
+        for e in (r.json().get("data") or {}).get("emails") or []:
+            status = (e.get("verification") or {}).get("status") or "unknown"
+            out.append({"email": e.get("value"), "first_name": e.get("first_name") or "", "last_name": e.get("last_name") or "",
+                        "position": e.get("position") or "", "confidence": e.get("confidence") or 0,
+                        "status": status, "verified": status == "valid"})
+        return [p for p in out if p["email"]]

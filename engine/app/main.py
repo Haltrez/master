@@ -247,6 +247,19 @@ class FamilyIn(BaseModel):
     related_titles: list[str] = []
 
 
+class AgencyIn(BaseModel):
+    name: str
+    website: str | None = None
+
+
+class LeadContactPatch(BaseModel):
+    contact_name: str | None = None
+    contact_first_name: str | None = None
+    contact_role: str | None = None
+    email: str | None = None
+    email_verified: bool | None = None
+
+
 MATCH_STATUSES = ("new", "sent", "contacted", "interview", "placed", "not_relevant")
 DELIVERY_OUTCOMES = ("none", "contacted", "meeting", "placement")
 CLIENT_PLANS = ("pilot", "founding", "done_for_you")
@@ -343,8 +356,15 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.get("/hot-leads", dependencies=A)
     def hot_leads(search_id: int | None = None, min_score: int | None = None, since: dt.datetime | None = None,
                   status: str | None = None, live_only: bool = False, limit: int = 500):
-        return db().hot_leads(search_id=search_id, min_score=min_score, since=since, status=status,
-                              live_only=live_only, limit=limit)
+        s = db()
+        rows = s.hot_leads(search_id=search_id, min_score=min_score, since=since, status=status,
+                           live_only=live_only, limit=limit)
+        contacts = s.lead_contacts_for([r["employer_norm"] for r in rows])
+        for r in rows:
+            c = contacts.get(r["employer_norm"])
+            r["contact"] = {"name": c.get("contact_name"), "role": c.get("contact_role"), "email": c.get("email"),
+                            "verified": c.get("email_verified"), "checked": True} if c else None
+        return rows
 
     @app.patch("/hot-leads/{lead_key}", dependencies=A)
     def patch_hot_lead(lead_key: str, body: StatusIn):
@@ -359,10 +379,6 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.get("/agencies", dependencies=A)
     def agencies(stage: str | None = None, search_id: int | None = None, q: str | None = None):
         return [agency_out(a) for a in db().agencies_list(stage=stage, search_id=search_id, q=q)]
-
-    class AgencyIn(BaseModel):
-        name: str
-        website: str | None = None
 
     @app.post("/agencies", dependencies=A, status_code=201)
     def create_agency(body: AgencyIn):
@@ -584,16 +600,10 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         if mark and leads:
             newly = set(s.mark_delivered(client_id, [l["lead_key"] for l in leads]))
             leads = [l for l in leads if l["lead_key"] in newly]   # never the same lead twice, even if called twice at once
-        tmpl = s.template_by_channel("client_hm_email")
-        today = uk_today().isoformat()
-        out = []
-        for l in sorted(leads, key=lambda x: -x["score"]):
-            niche, city = niche_and_city({"label": l["search_label"], "location": l["search_location"]})
-            out.append({"lead_key": l["lead_key"], "date_added": today, "company": l["employer_name"],
-                        "role": l["title"], "times_posted": l["posting_count_90d"],
-                        "first_seen": l["first_seen_at"].date().isoformat(), "location": l["location_name"],
-                        "ad_link": l["latest_url"], "score": l["score"],
-                        "suggested_opener": opener_for_lead(tmpl, l, niche, city)})
+        from .leads import lead_rows
+        out = lead_rows(s, sorted(leads, key=lambda x: -x["score"]), uk_today())
+        for r in out:
+            r["suggested_opener"] = r["suggested_email"]   # older Make scenarios used this name
         return {"client_id": client_id, "agency": c["agency_name"], "sheet_url": c["sheet_url"],
                 "sheet_id": sheet_id(c["sheet_url"]),
                 "delivery_email": c["delivery_email"], "count": len(out), "leads": out}
@@ -606,6 +616,48 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                         headers={"X-Skipped": json.dumps(dict(skipped)), "X-Skipped-Total": str(sum(skipped.values())),
                                  "X-Exported": str(len(rows)),
                                  "Content-Disposition": "attachment; filename=outreach.csv"})
+
+    @app.get("/exports/hot-leads.csv", dependencies=A)
+    def hot_leads_csv(search_id: int | None = None, min_score: int | None = None, status: str | None = None,
+                      live_only: bool = False):
+        from .leads import CSV_HEADERS, LEAD_COLUMNS, lead_rows
+        s = db()
+        search = s.search_row(search_id) if search_id else None
+        rows = lead_rows(s, s.hot_leads(search_id=search_id, min_score=min_score, status=status, live_only=live_only),
+                         uk_today(), search)
+        csv_text = to_csv([CSV_HEADERS[c] for c in LEAD_COLUMNS], [{CSV_HEADERS[k]: r[k] for k in LEAD_COLUMNS} for r in rows])
+        return Response(content="\ufeff" + csv_text, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename=hot-leads-{uk_today()}.csv"})
+
+    @app.post("/hot-leads/{lead_key}/contact", dependencies=A, status_code=202)
+    def find_lead_contact(lead_key: str, bg: BackgroundTasks):
+        s = db()
+        lead = s.one("select * from hot_leads where lead_key = %s", (lead_key,)) or notfound("hot lead")
+        if not settings.companies_house_api_key:
+            raise HTTPException(400, "COMPANIES_HOUSE_API_KEY is not set")
+        task_id = s.create_task("lead_contact")
+
+        def work():
+            from .ch_client import CachedCompaniesHouse, CompaniesHouseClient
+            from .lead_contacts import enrich_lead_company
+            from .web_lookup import Brave, Hunter
+            try:
+                r = enrich_lead_company(s, lead["employer_name"], lead["employer_norm"],
+                                        CachedCompaniesHouse(CompaniesHouseClient(settings.companies_house_api_key), s),
+                                        Brave(settings.brave_api_key) if settings.brave_api_key else None,
+                                        Hunter(settings.hunter_api_key) if settings.hunter_api_key else None)
+                s.finish_task(task_id, "ok", {k: r.get(k) for k in ("contact_name", "contact_role", "email")})
+            except Exception as exc:
+                s.finish_task(task_id, "error", error=str(exc))
+        bg.add_task(work)
+        return {"task_id": task_id, "status": "running"}
+
+    @app.patch("/lead-contacts/{employer_norm}", dependencies=A)
+    def patch_lead_contact(employer_norm: str, body: LeadContactPatch):
+        try:
+            return db().update_lead_contact(employer_norm, body.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
 
     @app.get("/exports/matches.csv", dependencies=A)
     def matches_csv(agency_id: int):

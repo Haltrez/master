@@ -717,7 +717,56 @@ class _CrmMixin:
 
 
 # =============================================================================
+# Hot-lead company contacts + the Excel-style lead rows
+# =============================================================================
+LEAD_CONTACT_COLS = ("employer_norm", "company_name", "ch_company_number", "ch_company_type", "ch_match_confidence",
+                     "website", "contact_name", "contact_first_name", "contact_role", "email", "email_status",
+                     "email_verified")
+
+
+class _LeadContactMixin:
+    def save_lead_contact(self, row: dict) -> dict:
+        vals = {c: row.get(c) for c in LEAD_CONTACT_COLS}
+        vals["email_verified"] = bool(vals["email_verified"])
+        cols = ", ".join(LEAD_CONTACT_COLS)
+        upd = ", ".join(f"{c} = excluded.{c}" for c in LEAD_CONTACT_COLS if c != "employer_norm")
+        return self.one(f"insert into lead_contacts ({cols}, checked_at) values ({', '.join(['%s'] * len(LEAD_CONTACT_COLS))}, now()) "
+                        f"on conflict (employer_norm) do update set {upd}, checked_at = now() returning *",
+                        [vals[c] for c in LEAD_CONTACT_COLS])
+
+    def lead_contacts_for(self, employer_norms: list[str]) -> dict[str, dict]:
+        if not employer_norms:
+            return {}
+        return {r["employer_norm"]: r for r in self.q("select * from lead_contacts where employer_norm = any(%s)",
+                                                       (list(set(employer_norms)),))}
+
+    def update_lead_contact(self, employer_norm: str, fields: dict) -> dict | None:
+        allowed = {k: v for k, v in fields.items() if k in ("contact_name", "contact_first_name", "contact_role",
+                                                              "email", "email_verified", "website")}
+        if allowed.get("email") and self.is_suppressed(allowed["email"]):
+            raise ValueError("this email is on the suppression list")
+        if not self.one("select 1 as x from lead_contacts where employer_norm = %s", (employer_norm,)):
+            self.q("insert into lead_contacts (employer_norm) values (%s)", (employer_norm,))
+        return self._update("lead_contacts", employer_norm, allowed, key="employer_norm")
+
+    def lead_companies_to_enrich(self, limit: int = 20) -> list[dict]:
+        """Hot-lead companies with no contact lookup yet, best score first."""
+        return self.q("""select employer_norm, max(employer_name) as employer_name, max(score) as score
+                         from hot_leads h where status <> 'ignored'
+                         and not exists (select 1 from lead_contacts c where c.employer_norm = h.employer_norm)
+                         group by employer_norm order by max(score) desc limit %s""", (limit,))
+
+    def lead_history(self, job_id_lists: list[list[int]]) -> dict[int, dict]:
+        """url, salary and first seen for every job id in the given leads."""
+        ids = sorted({j for js in job_id_lists for j in (js or [])})
+        if not ids:
+            return {}
+        return {r["job_id"]: r for r in self.q("select job_id, url, max_salary, min_salary, first_seen_at, posted_date "
+                                                "from listings where job_id = any(%s)", (ids,))}
+
+
+# =============================================================================
 # The store: every mixin above. New query groups are added as mixins.
 # =============================================================================
-class PgStore(_CoreStore, _DetectMixin, _AgencyMixin, _CrmMixin):
+class PgStore(_CoreStore, _DetectMixin, _AgencyMixin, _CrmMixin, _LeadContactMixin):
     pass

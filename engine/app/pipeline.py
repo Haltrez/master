@@ -50,6 +50,11 @@ def rebuild_all(store, settings: Settings, reed=None) -> dict[str, Any]:
     out["hot_leads"] = rebuild_hot_leads(store, threshold=threshold(store, settings),
                                          lookback_days=settings.lookback_days, reed=reed)
     out["agencies"] = rebuild_agencies(store, lookback_days=settings.lookback_days)
+    from .lead_contacts import enrich_new_lead_companies
+    try:
+        out["lead_contacts"] = enrich_new_lead_companies(store, settings)
+    except Exception as exc:  # contacts are a bonus; never fail the run over them
+        out["lead_contacts"] = {"error": str(exc)}
     return out
 
 

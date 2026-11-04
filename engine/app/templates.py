@@ -14,7 +14,7 @@ from typing import Any
 
 VARIABLES = ("first_name", "agency", "niche", "city", "lead1_employer", "lead1_role", "lead1_count", "lead1_since",
              "lead2_employer", "lead2_role", "lead2_count", "lead3_employer", "lead3_role", "lead3_count",
-             "hm_role", "open_since", "sender_name")
+             "hm_role", "open_since", "sender_name", "company", "posted_since")
 PLACEHOLDER = re.compile(r"\{([a-z0-9_]+)\}")
 
 

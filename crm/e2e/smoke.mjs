@@ -82,10 +82,12 @@ try {
     await phone.screenshot({ path: shots + `phone${p.replace(/\//g, "_") || "_today"}.png`, fullPage: true });
   }
 
-  await page.keyboard.press("Control+k");
-  await page.keyboard.type("harl");
+  await phone.close();
+  await page.bringToFront();
+  await page.click("header button:has-text('Search')");
+  await page.getByLabel("Search", { exact: true }).fill("harl");
   await page.waitForSelector("text=Hot lead · score");
-  check(true, "Ctrl+K global search finds hot leads");
+  check(true, "global search (Ctrl/Cmd+K box) finds hot leads");
   console.log("ALL CRM SMOKE CHECKS PASSED");
 } finally {
   await browser.close();

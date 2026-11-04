@@ -36,15 +36,22 @@ need any Make.com experience. Each one takes 10 to 20 minutes.
 Create a Google Sheet called **Repost Radar – client template**. Give it two
 tabs.
 
-**Tab 1: `Hot leads`.** Row 1 headers, columns A–J:
+**Tab 1: `Hot leads`.** It's laid out like the owner's Excel. Row 1 headers, columns A–O:
 
-| A | B | C | D | E | F | G | H | I | J |
-|---|---|---|---|---|---|---|---|---|---|
-| Date added | Company | Role | Times posted | First seen | Location | Ad link | Suggested opener | Status | Notes |
+| A | B | C | D | E | F | G | H | I | J | K | L | M | N | O |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Date added | Company | Role | Max salary | Times posted | First seen | Location | Ad link | Previous ad | Decision maker | Their role | Email | Suggested email | Status | Notes |
 
-- Select column I, then **Data → Data validation → Dropdown**, with the
+- Columns A–M are filled by Make. The client fills N and O.
+- Select column N, then **Data → Data validation → Dropdown**, with the
   options New, Contacted, Meeting, Placement, Not relevant.
-- Columns A–H are filled by Make. The client fills I and J.
+- **Email** is only filled when Hunter verified it *and* Companies House
+  confirms a Ltd, LLP or PLC. Otherwise there's a name only, so the client
+  phones or uses LinkedIn.
+- **Suggested email** is ready to send from the client agency to the hiring
+  company. It greets the decision maker by first name, or says "Hello," when
+  there isn't one.
+- Make column M wide, and turn on **Format → Wrapping → Wrap**.
 - Freeze row 1 and make it bold.
 
 **Tab 2: `Candidate matches`.** Row 1 headers, columns A–I:
@@ -104,10 +111,12 @@ then emails them. A lead never goes to the same client twice.
 6. **Google Sheets → Add a Row**. Connect your Google account the first time.
    - Spreadsheet ID: **Map** → `{{4.data.sheet_id}}`
    - Sheet name: `Hot leads`
-   - Column range A–J. Fill: A `{{5.date_added}}`, B `{{5.company}}`,
-     C `{{5.role}}`, D `{{5.times_posted}}`, E `{{5.first_seen}}`,
-     F `{{5.location}}`, G `{{5.ad_link}}`, H `{{5.suggested_opener}}`,
-     I `New`, J empty.
+   - Column range A–O. Fill:
+     A `{{5.date_added}}`, B `{{5.company}}`, C `{{5.role}}`,
+     D `{{5.max_salary}}`, E `{{5.times_posted}}`, F `{{5.first_seen}}`,
+     G `{{5.location}}`, H `{{5.ad_link}}`, I `{{5.previous_ad_link}}`,
+     J `{{5.decision_maker}}`, K `{{5.decision_maker_role}}`,
+     L `{{5.email}}`, M `{{5.suggested_email}}`, N `New`, O empty.
 7. **Tools → Numeric aggregator**:
    - Source module: the iterator in step 5
    - Function: COUNT

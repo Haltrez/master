@@ -210,7 +210,7 @@ function DraftPanel({ agency, templates, contacts, onLogged }: { agency: any; te
       </div>
       {!draft ? <p className="text-sm text-slate-500">Loading…</p> : draft.blocked ? <ErrorNote error={`No draft: ${draft.blocked}`} /> : (
         <>
-          {!agency.email_allowed && tmpl?.channel === "email" && <p className="mb-2 rounded-lg bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">Check before emailing: {agency.compliance}.</p>}
+          {!agency.email_allowed && tmpl?.channel === "email" && <p className="mb-2 rounded-lg bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">{agency.compliance.charAt(0).toUpperCase() + agency.compliance.slice(1)}.</p>}
           {draft.missing.length > 0 && <p className="mb-2 rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300" role="alert">Missing: {draft.missing.join(", ")}. Don't send this one yet.</p>}
           {draft.subject && <p className="mb-1 text-sm"><span className="text-slate-500">Subject:</span> {draft.subject}</p>}
           <pre className="whitespace-pre-wrap rounded-lg bg-slate-50 p-3 font-sans text-sm dark:bg-slate-950" data-testid="draft-body">{draft.body}</pre>

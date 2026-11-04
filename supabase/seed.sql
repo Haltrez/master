@@ -49,5 +49,9 @@ Not interested? Reply "stop" and I won't email again.$t$
   'Client opener to hiring manager',
   'client_hm_email',
   null,
-  $t$Hi, I noticed your {hm_role} role has been advertised since {open_since}. We specialise in {niche} in {city} and have candidates who could interview this week. Worth a quick call?$t$
+  $t$Hi {first_name},
+
+I noticed {company} has advertised the {hm_role} role {posted_since}. That usually means the right person hasn't come through yet.
+
+We specialise in {niche} recruitment around {city} and have candidates who could interview this week. Worth a quick call?$t$
 );

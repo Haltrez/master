@@ -5,7 +5,8 @@ import { Button, Card, ErrorNote, Input, Label, Select, Textarea, cn } from "@/c
 import { api } from "@/lib/api";
 
 const VARS = ["first_name", "agency", "niche", "city", "lead1_employer", "lead1_role", "lead1_count", "lead1_since",
-  "lead2_employer", "lead2_role", "lead2_count", "lead3_employer", "lead3_role", "lead3_count", "hm_role", "open_since", "sender_name"];
+  "lead2_employer", "lead2_role", "lead2_count", "lead3_employer", "lead3_role", "lead3_count", "hm_role", "open_since", "sender_name",
+  "company", "posted_since"];
 const FOOTER = "{sender_name}, SmartEmploy\nSmartEmploy is a trading name of SIA Impresso, Latvia\nNot interested? Reply \"stop\" and I won't email again.";
 
 export function TemplatesClient({ templates, agencies }: { templates: any[]; agencies: any[] }) {

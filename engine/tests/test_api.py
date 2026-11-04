@@ -170,8 +170,10 @@ def test_daily_leads_never_returns_the_same_lead_twice(api, store):
     assert day1["count"] == 3
     first = day1["leads"][0]
     assert first["company"] == "Harlow Group" and first["times_posted"] == 4 and first["first_seen"] == "2026-08-12"
-    assert "Management Accountant role has been advertised since August 2026" in first["suggested_opener"]
-    assert "Accountancy in Leeds" in first["suggested_opener"]
+    assert first["suggested_email"].startswith("Hello,")                 # no decision maker yet
+    assert "Harlow Group has advertised the Management Accountant role 4 times since August 2026" in first["suggested_email"]
+    assert "Accountancy recruitment around Leeds" in first["suggested_email"]
+    assert first["suggested_opener"] == first["suggested_email"]
     day2 = api.get(f"/clients/{c['id']}/daily-leads", headers=H, params={"mark": True}).json()
     assert day2["count"] == 0
     store.q("""insert into hot_leads (lead_key, employer_name, employer_norm, title, posting_count_90d, first_seen_at,
@@ -372,3 +374,9 @@ def test_role_match_endpoints(api, store, calls):
     r = api.post(f"/agencies/{a['id']}/matches/send-to-sheet", headers=H, params={"sheet_url": "https://docs/x"})
     assert r.status_code == 202 and calls.webhooks[-1] == ("https://hook.make.com/m", {"agency_id": a["id"],
                                                                                       "sheet_url": "https://docs/x"})
+
+
+def test_create_agency_by_name(api):
+    r = api.post("/agencies", headers=H, json={"name": "MCM Recruitment Solutions"})
+    assert r.status_code == 201 and r.json()["name"] == "MCM Recruitment Solutions"
+    assert api.post("/agencies", headers=H, json={"name": "MCM Recruitment Solutions"}).json()["id"] == r.json()["id"]
