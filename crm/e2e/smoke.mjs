@@ -31,6 +31,14 @@ try {
   await page.waitForURL(/\/hot-leads/);
   check(true, "login works and returns to the page asked for");
 
+  // The fake Reed data is two copies live at once (not a repost), so count all signals for this test.
+  await page.goto(BASE + "/settings");
+  const reposts = page.getByRole("checkbox", { name: /Reposts only/ });
+  check(await reposts.isChecked(), "Reposts only is on by default");
+  await reposts.uncheck();
+  await page.click("button:has-text('Save')");
+  await page.waitForSelector("text=Saved ✓");
+
   await page.goto(BASE + "/searches");
   await page.fill("#label", "Accountancy - Leeds");
   const kw = page.getByLabel("Add keyword");

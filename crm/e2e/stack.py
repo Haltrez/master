@@ -96,6 +96,10 @@ def main() -> int:
             subprocess.run(run_as + [f"{PG_BIN}/psql", "-h", work, "-U", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-f", str(f)],
                            check=True, capture_output=True)
 
+        # No internet archive in the test sandbox.
+        subprocess.run(run_as + [f"{PG_BIN}/psql", "-h", work, "-U", "postgres", "-q", "-c",
+                                 "update app_settings set value = '0' where key = 'archive_checks_per_run'"],
+                       check=True, capture_output=True)
         reed_port, engine_port, crm_port = free_port(), free_port(), free_port()
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", reed_port), FakeReed)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
