@@ -64,11 +64,12 @@ def default_hooks() -> Hooks:
     def enrich(store, settings, agency_id):
         from .agencies import enrich_agency
         from .ch_client import CachedCompaniesHouse, CompaniesHouseClient
-        from .web_lookup import Brave, Hunter
+        from .lead_contacts import hunter_for
+        from .web_lookup import Brave
         ch = CachedCompaniesHouse(CompaniesHouseClient(settings.companies_house_api_key), store)
         return enrich_agency(store, agency_id, ch,
                              brave=Brave(settings.brave_api_key) if settings.brave_api_key else None,
-                             hunter=Hunter(settings.hunter_api_key) if settings.hunter_api_key else None)
+                             hunter=hunter_for(store, settings))
 
     def role_services(store, settings, need_fetcher):
         from .geo import Geocoder
@@ -689,12 +690,13 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         def work():
             from .ch_client import CachedCompaniesHouse, CompaniesHouseClient
             from .lead_contacts import enrich_lead_company
-            from .web_lookup import Brave, Hunter
+            from .lead_contacts import hunter_for
+            from .web_lookup import Brave
             try:
                 r = enrich_lead_company(s, lead["employer_name"], lead["employer_norm"],
                                         CachedCompaniesHouse(CompaniesHouseClient(settings.companies_house_api_key), s),
                                         Brave(settings.brave_api_key) if settings.brave_api_key else None,
-                                        Hunter(settings.hunter_api_key) if settings.hunter_api_key else None)
+                                        hunter_for(s, settings))
                 s.finish_task(task_id, "ok", {k: r.get(k) for k in ("contact_name", "contact_role", "email")})
             except Exception as exc:
                 s.finish_task(task_id, "error", error=str(exc))
@@ -809,7 +811,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         s = db()
         allowed = {"repost_threshold", "daily_outreach_target", "sender_name", "make_webhooks", "reposts_only",
                    "archive_checks_per_run", "lead_contacts_per_run", "verified_companies_only",
-                   "lead_ch_checks_per_run"}
+                   "lead_ch_checks_per_run", "hunter_monthly_limit"}
         bad = set(body) - allowed
         if bad:
             raise HTTPException(422, f"unknown settings {sorted(bad)}")

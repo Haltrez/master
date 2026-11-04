@@ -17,14 +17,15 @@ def _brave():
         {"url": "https://www.linkedin.com/company/harlow"}, {"url": "https://www.harlowgroup.co.uk/about"}]}})), min_interval=0)
 
 
-def _hunter(hr_people, finder_status="valid"):
+def _hunter(hr_people, finder_status="valid", calls=None, **kw):
     def h(req):
+        if calls is not None:
+            calls.append(req.url.path)
         if req.url.path.endswith("domain-search"):
-            people = hr_people if req.url.params["department"] == "hr" else []
-            return httpx.Response(200, json={"data": {"emails": people}})
+            return httpx.Response(200, json={"data": {"emails": hr_people}})
         return httpx.Response(200, json={"data": {"email": "john.smith@harlowgroup.co.uk", "score": 90,
                                                   "verification": {"status": finder_status}}})
-    return Hunter("k", transport=httpx.MockTransport(h))
+    return Hunter("k", transport=httpx.MockTransport(h), **kw)
 
 
 CH_LTD = [{"title": "HARLOW GROUP LIMITED", "company_number": "0099", "company_status": "active", "company_type": "ltd"}]
@@ -174,3 +175,31 @@ def test_hot_leads_json_shows_company_check(api, store):
     rows = {r["employer_name"]: r for r in api.get("/hot-leads", headers=H).json()}
     assert rows["Harlow Group"]["company_check"] == "not_found" and not rows["Harlow Group"]["company_verified"]
     assert rows["Kirkstall Engineering"]["company_verified"]
+
+
+def test_hunter_spends_at_most_two_credits_and_stops_at_the_monthly_limit(store):
+    calls = []
+    enrich_lead_company(store, "Harlow Group Ltd", "harlow group", FakeCH(CH_LTD, officers=OFFICERS), _brave(),
+                        _hunter([], finder_status="accept_all", calls=calls))
+    assert len(calls) == 2   # one domain search + one email finder for the first director
+    calls.clear()
+    h = _hunter([], calls=calls, store=store, monthly_limit=3)
+    for _ in range(5):
+        h.domain_people("harlowgroup.co.uk")
+    assert len(calls) == 3
+
+
+def test_paid_lookups_only_for_companies_in_open_orders(store):
+    from app import orders as O
+    store.q("insert into searches (id, label, keywords, location) values (50, 'Other - York', '{x}', 'York')")
+    for key, emp, sid in (("a", "In Order Ltd", None), ("b", "No Order Ltd", 50)):
+        store.q("""insert into hot_leads (lead_key, employer_name, employer_norm, title, posting_count_90d, first_seen_at,
+                   last_seen_at, live_now, long_open, score, job_ids) values (%s, %s, %s, 'Developer', 3, now(), now(),
+                   true, false, 5, '{}')""", (key, emp, emp.lower()))
+        store.q("insert into lead_contacts (employer_norm, company_name, verified_company) values (%s, %s, true)",
+                (emp.lower(), emp))
+    o = O.create_order(store, agency_name="Acme", industry="IT & Tech", location="Leeds", leads_wanted=5)
+    store.q("insert into hot_lead_searches values ('a', %s), ('b', 50)", (o["search_id"],))
+    assert [r["employer_name"] for r in store.lead_companies_needing_contacts(10)] == ["In Order Ltd"]
+    O.update_order(store, o["id"], {"status": "paused"})
+    assert store.lead_companies_needing_contacts(10) == []

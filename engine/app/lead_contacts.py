@@ -81,14 +81,14 @@ def enrich_lead_company(store, employer_name: str, employer_norm: str, ch, brave
         if domain:
             row["website"] = f"https://{domain}"
     if hunter is not None and domain:
-        person = pick_hunter_person(hunter.domain_people(domain, "hr")) or \
-            pick_hunter_person(hunter.domain_people(domain, "executive"))
+        # One domain search (all departments) costs one credit; pick_hunter_person prefers hiring titles.
+        person = pick_hunter_person(hunter.domain_people(domain))
         if person and not store.is_suppressed(person["email"]):
             row.update(contact_name=f"{person['first_name']} {person['last_name']}".strip(),
                        contact_first_name=person["first_name"], contact_role=person["position"] or None,
                        email=person["email"], email_status="valid", email_verified=True)
         else:
-            for full, first, last in directors[:2]:
+            for full, first, last in directors[:1]:   # one email-finder credit at most
                 r = hunter.find_email(domain, first, last)
                 if r["email"] and not store.is_suppressed(r["email"]) and (r["verified"] or not row.get("email")):
                     row.update(contact_name=full, contact_first_name=first, contact_role="Director",
@@ -99,6 +99,18 @@ def enrich_lead_company(store, employer_name: str, employer_norm: str, ch, brave
     store.save_lead_contact(row)
     log.info("lead contact %s: %s / %s", employer_name, row.get("contact_name"), "email" if row.get("email") else "no email")
     return row
+
+
+def hunter_for(store, settings):
+    """Hunter with the monthly allowance from Settings (free plan: 25 searches a month)."""
+    from .web_lookup import Hunter
+    if not settings.hunter_api_key:
+        return None
+    try:
+        limit = int(store.setting("hunter_monthly_limit", 25))
+    except (TypeError, ValueError):
+        limit = 25
+    return Hunter(settings.hunter_api_key, store=store, monthly_limit=limit)
 
 
 def enrich_new_lead_companies(store, settings, limit: int | None = None) -> dict[str, int]:
@@ -113,7 +125,7 @@ def enrich_new_lead_companies(store, settings, limit: int | None = None) -> dict
         limit = 20
     ch = CachedCompaniesHouse(CompaniesHouseClient(settings.companies_house_api_key), store)
     brave = Brave(settings.brave_api_key) if settings.brave_api_key else None
-    hunter = Hunter(settings.hunter_api_key) if settings.hunter_api_key else None
+    hunter = hunter_for(store, settings)
     try:
         ch_limit = int(store.setting("lead_ch_checks_per_run", 300))
     except (TypeError, ValueError):
@@ -127,7 +139,7 @@ def enrich_new_lead_companies(store, settings, limit: int | None = None) -> dict
             agencies += r["is_agency"]
         except Exception as exc:  # one bad company never stops the rest
             log.warning("companies house check for %s failed: %s", lead["employer_name"], exc)
-    # 2) Decision maker + email for the best verified companies (uses Brave/Hunter credits)
+    # 2) Decision maker + email (Brave/Hunter credits): only companies about to go into an open order
     for lead in store.lead_companies_needing_contacts(limit):
         try:
             enrich_lead_company(store, lead["employer_name"], lead["employer_norm"], ch, brave, hunter)

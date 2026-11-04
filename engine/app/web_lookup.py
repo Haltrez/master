@@ -106,14 +106,28 @@ class Brave:
 class Hunter:
     URL = "https://api.hunter.io/v2/email-finder"
 
-    def __init__(self, api_key: str, *, transport: httpx.BaseTransport | None = None):
+    def __init__(self, api_key: str, *, transport: httpx.BaseTransport | None = None, store=None,
+                 monthly_limit: int | None = None):
         self.api_key = api_key
         self._http = httpx.Client(transport=transport, timeout=25.0)
+        self._store, self._limit = store, monthly_limit
+
+    def _take(self) -> bool:
+        """One request from this month's allowance (kept in the cache table). False once it's used up."""
+        if self._store is None or self._limit is None:
+            return True
+        key = "hunter_used:" + __import__("datetime").date.today().strftime("%Y-%m")
+        used = int((self._store.cache_get(key) or {}).get("n", 0))
+        if used >= self._limit:
+            log.info("hunter: monthly limit of %d reached, skipping", self._limit)
+            return False
+        self._store.cache_set(key, {"n": used + 1})
+        return True
 
     def find_email(self, domain: str, first_name: str, last_name: str) -> dict[str, Any]:
         """{'email', 'status', 'score', 'verified'}; verified only when Hunter says 'valid'."""
         empty = {"email": "", "status": "not_found", "score": 0, "verified": False}
-        if not (domain and first_name and last_name):
+        if not (domain and first_name and last_name) or not self._take():
             return empty
         try:
             r = self._http.get(self.URL, params={"api_key": self.api_key, "domain": domain,
@@ -131,14 +145,15 @@ class Hunter:
         status = (d.get("verification") or {}).get("status") or "unknown"
         return {"email": email, "status": status, "score": d.get("score") or 0, "verified": status == "valid"}
 
-    def domain_people(self, domain: str, department: str = "hr", limit: int = 10) -> list[dict[str, Any]]:
-        """People Hunter knows at a domain in one department (hr, executive, management...)."""
-        if not domain:
+    def domain_people(self, domain: str, department: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        """People Hunter knows at a domain (optionally one department: hr, executive, management...)."""
+        if not domain or not self._take():
             return []
+        params = {"api_key": self.api_key, "domain": domain, "type": "personal", "limit": limit}
+        if department:
+            params["department"] = department
         try:
-            r = self._http.get("https://api.hunter.io/v2/domain-search",
-                               params={"api_key": self.api_key, "domain": domain, "department": department,
-                                       "type": "personal", "limit": limit})
+            r = self._http.get("https://api.hunter.io/v2/domain-search", params=params)
         except httpx.HTTPError as exc:
             log.warning("hunter domain search failed: %s", type(exc).__name__)
             return []

@@ -779,10 +779,13 @@ class _LeadContactMixin:
                          group by employer_norm order by max(score) desc limit %s""", (limit,))
 
     def lead_companies_needing_contacts(self, limit: int = 20) -> list[dict]:
-        """Verified real companies with hot leads whose decision maker we haven't looked up yet."""
+        """Verified real companies we haven't looked up yet, in a search an open lead order uses
+        (paid lookups only for leads that are going to a client)."""
         return self.q("""select c.employer_norm, max(h.employer_name) as employer_name, max(h.score) as score
                          from lead_contacts c join hot_leads h on h.employer_norm = c.employer_norm
                          where c.verified_company and not c.contacts_checked and h.status <> 'ignored'
+                           and exists (select 1 from hot_lead_searches hs join lead_orders o on o.search_id = hs.search_id
+                                       where hs.lead_key = h.lead_key and o.status in ('collecting', 'waiting', 'error'))
                          group by c.employer_norm order by max(h.score) desc limit %s""", (limit,))
 
     def mark_employer_agency(self, employer_norm: str) -> int:

@@ -91,8 +91,10 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _obj({}, [])},
     {"name": "update_settings", "strict": True,
      "description": "Change lead rules: repost_threshold (posts needed, default 2), reposts_only (only ads that "
-                    "lapsed and came back), verified_companies_only (Companies House checked companies only).",
-     "input_schema": _obj({"repost_threshold": I, "reposts_only": B, "verified_companies_only": B}, [])},
+                    "lapsed and came back), verified_companies_only (Companies House checked companies only), "
+                    "hunter_monthly_limit (Hunter.io email lookups allowed per month; free plan 25).",
+     "input_schema": _obj({"repost_threshold": I, "reposts_only": B, "verified_companies_only": B,
+                           "hunter_monthly_limit": I}, [])},
 ]
 
 
@@ -192,11 +194,11 @@ class Toolbox:
             counts = s.one("""select count(*) as hot_leads,
                                 (select count(*) from lead_contacts where verified_company) as verified_companies,
                                 (select count(*) from deliveries) as delivered from hot_leads""")
-            keep = ("repost_threshold", "reposts_only", "verified_companies_only")
+            keep = ("repost_threshold", "reposts_only", "verified_companies_only", "hunter_monthly_limit")
             return {"sources_last_run": sources, "google": self.google(), "counts": counts,
                     "settings": {k: s.setting(k) for k in keep}}
         if name == "update_settings":
-            for k in ("repost_threshold", "reposts_only", "verified_companies_only"):
+            for k in ("repost_threshold", "reposts_only", "verified_companies_only", "hunter_monthly_limit"):
                 if a.get(k) is not None:
                     s.set_setting(k, a[k])
             return {"ok": True, "note": "applies from the next collection run"}
