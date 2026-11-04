@@ -249,6 +249,13 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
             if v.by == "haiku" and v.signals.get("direct_employer") is False:
                 vetoed.add(l["employer_norm"])
                 good.pop(l["employer_norm"], None)
+            if v.by == "haiku" and v.signals.get("not_recruitment_firm") is False:
+                vetoed.add(l["employer_norm"])
+                good.pop(l["employer_norm"], None)
+                if v.signals.get("direct_employer") is False:
+                    # a recruiter advertising for a client: an agency everywhere from now on
+                    # (leaves hot leads, joins the agencies list, like a Companies House recruitment SIC)
+                    store.mark_employer_agency(l["employer_norm"])
             if not v.ok or l["employer_norm"] in vetoed:
                 stats["failed_haiku"] += 1
                 continue

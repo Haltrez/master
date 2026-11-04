@@ -1,13 +1,14 @@
 """Claude Haiku reads each candidate ad and gives yes/no signals before a lead can go out.
 
-For every ad it answers four questions against the order's industry definition:
+For every ad it answers five questions against the order's industry definition:
   industry_fit     the job itself belongs to the industry (not just mentioned)
   direct_employer  the company hiring is the one advertising (not a recruitment agency / job board)
   real_vacancy     a real, specific job (not a talent pool, franchise, commission-only/self-employed,
                    training course, volunteer or "register your interest" ad)
   agency_would_fill  a specialist agency could realistically get paid to fill it (not apprenticeships,
                    graduate schemes run in-house, or mass seasonal hiring)
-A lead goes out only with four yeses. Haiku also gives the clean role name and a short reason,
+  not_recruitment_firm  the company isn't itself a recruitment/staffing business (a competitor)
+A lead goes out only with five yeses. Haiku also gives the clean role name and a short reason,
 which go into the sheet.
 
 Verdicts are cached per industry + ad, so an ad is read once. Ads are sent in small batches with
@@ -30,7 +31,7 @@ log = logging.getLogger("qualify")
 MODEL = "claude-haiku-5-5"
 BATCH = 8
 CACHE_DAYS = 120
-SIGNALS = ("industry_fit", "direct_employer", "real_vacancy", "agency_would_fill")
+SIGNALS = ("industry_fit", "direct_employer", "not_recruitment_firm", "real_vacancy", "agency_would_fill")
 
 VERDICT = {"type": "object", "additionalProperties": False,
            "required": ["id", *SIGNALS, "role", "reason"],
@@ -51,11 +52,15 @@ actual duties, not words in the company blurb. A job that only mentions the indu
 recruitment agency, staffing/umbrella company or job board advertising for a client ("our client", "on behalf \
 of", "we are recruiting for a ..." about another company), or when the advertiser's main business is recruitment \
 or outsourced fundraising/field-marketing teams.
+- not_recruitment_firm: the hiring company itself is not a recruitment, staffing, executive-search, RPO, \
+contractor-supply or umbrella business, even when it is hiring for its own office (a recruiter hiring its own sales \
+staff is a competitor of our client, not a lead). Use what you know about the company and the ad text.
 - real_vacancy: a specific, real job with an employer. False for talent pools, "register your interest", \
 franchise or business opportunities, self-employed or commission-only roles, multi-level marketing, training \
 courses you pay for, volunteer roles.
-- agency_would_fill: a specialist recruitment agency could realistically be paid a fee to fill it. False for \
-apprenticeships, internships, in-house graduate schemes and mass seasonal/temporary volume hiring.
+- agency_would_fill: a specialist recruitment agency could realistically be paid a fee to fill it. Permanent, \
+fixed-term, contract, maternity-cover, part-time and entry-level jobs are all fine. False only for apprenticeships, \
+internships, in-house graduate schemes and mass seasonal/temporary volume hiring.
 - role: the job's clean name (e.g. "Field Sales Executive"), no salary or location.
 - reason: at most 15 words, plain English, why it passes or the first reason it fails."""
 
@@ -73,7 +78,7 @@ class Verdict:
 
 
 def _key(industry: str, ad_id: Any) -> str:
-    return "qual:" + hashlib.sha1(f"{industry.strip().lower()}|{ad_id}".encode()).hexdigest()[:24]
+    return "qual2:" + hashlib.sha1(f"{industry.strip().lower()}|{ad_id}".encode()).hexdigest()[:24]
 
 
 def _ad_block(i: int, ad: dict) -> str:

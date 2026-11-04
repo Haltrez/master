@@ -13,8 +13,8 @@ INDUSTRIES: dict[str, dict] = {
                    "sales consultant", "area sales manager", "telesales", "marketing manager",
                    "marketing executive", "digital marketing"],
         "in": "B2B and B2C sales jobs (sales executive, business development, account manager/executive, key "
-              "account, field/area sales, telesales/inside sales, sales manager/director, estate agency sales "
-              "negotiator, car/vehicle sales, recruitment-free sales roles in any sector) and marketing jobs "
+              "account, field/area sales, telesales/inside sales, sales manager/director, estate and lettings agency "
+              "negotiators, car/vehicle sales, recruitment-free sales roles in any sector) and marketing jobs "
               "(marketing executive/manager, digital marketing, SEO/PPC, content, brand, product marketing, CRM "
               "marketing, marketing director).",
         "out": "Door-to-door or face-to-face charity fundraising and outsourced field-marketing teams (they are "

@@ -319,7 +319,7 @@ class FakeHaiku:
             fit = "sales" in m.group(2).lower()
             direct = "our client" not in m.group(3).lower()
             verdicts.append({"id": int(m.group(1)), "industry_fit": fit, "direct_employer": direct,
-                             "real_vacancy": True, "agency_would_fill": True, "role": m.group(2).title(),
+                             "real_vacancy": True, "agency_would_fill": True, "not_recruitment_firm": True, "role": m.group(2).title(),
                              "reason": "sales role" if fit else "not sales"})
         return SimpleNamespace(stop_reason="end_turn",
                                content=[SimpleNamespace(type="text", text=json.dumps({"verdicts": verdicts}))])
