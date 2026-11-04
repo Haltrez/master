@@ -176,6 +176,24 @@ def update_order(store, order_id: int, fields: dict) -> dict | None:
     return get_order(store, order_id)
 
 
+def delete_order(store, order_id: int) -> bool:
+    """Remove an order and what it sent. When the agency's client has no other order, the client goes too,
+    which frees its industry + region for another agency. Hot leads themselves are kept.
+    (A Google Sheet already made stays in the owner's Drive.)"""
+    o = get_order(store, order_id)
+    if o is None:
+        return False
+    with store.conn.transaction():
+        store.q("delete from deliveries where order_id = %s", (order_id,))
+        store.q("delete from lead_orders where id = %s", (order_id,))
+        cid = o.get("client_id")
+        if cid and not store.val("select count(*) from lead_orders where client_id = %s", (cid,)):
+            sids = [r["search_id"] for r in store.q("select search_id from client_territories where client_id = %s", (cid,))]
+            store.q("delete from clients where id = %s", (cid,))   # territories + deliveries cascade
+            store.q("update searches set active = false where id = any(%s)", (sids,))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # filling
 # ---------------------------------------------------------------------------

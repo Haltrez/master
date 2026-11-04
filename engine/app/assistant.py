@@ -35,6 +35,7 @@ How you work:
 - An order runs in the background: collection takes a few minutes, and the sheet fills as verified leads are \
 found. Say so, and give the sheet link once there is one.
 - Before saying how many leads exist, check with the tools. Never invent leads, numbers, emails or links.
+- Deleting an order cannot be undone: ask the owner to confirm (name the agency, industry and town) first.
 - Industry: use a preset name from list_industries when one fits; otherwise pass custom keywords that are job \
 titles (each word must appear in the job title).
 - Replies are for a busy person on a phone: short, plain English, no markdown tables, no jargon."""
@@ -72,6 +73,10 @@ TOOLS: list[dict[str, Any]] = [
      "description": "Change an order: number of leads, frequency, client email, or pause / resume it.",
      "input_schema": _obj({"order_id": I, "leads_wanted": I, "frequency": {"type": "string", "enum": ["once", "weekly"]},
                            "client_email": S, "paused": B}, ["order_id"])},
+    {"name": "delete_order", "strict": True,
+     "description": "Delete an order and its sent-lead records, freeing its industry + region for another agency. "
+                    "Only after the owner has clearly confirmed deleting that specific order.",
+     "input_schema": _obj({"order_id": I}, ["order_id"])},
     {"name": "list_industries", "strict": True,
      "description": "Industry presets and the job titles each one searches for.",
      "input_schema": _obj({}, [])},
@@ -154,6 +159,8 @@ class Toolbox:
                 s._update("lead_orders", o["id"], {"status": "waiting"})
                 self.start_fill(o["id"], False)
             return self._order_brief(O.get_order(s, a["order_id"]))
+        if name == "delete_order":
+            return {"deleted": O.delete_order(s, a["order_id"])}
         if name == "list_industries":
             return O.INDUSTRIES
         if name == "find_hot_leads":

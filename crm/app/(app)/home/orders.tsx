@@ -99,6 +99,11 @@ function OrderRow({ o, onChange }: { o: any; onChange: () => void }) {
         {o.status === "paused"
           ? <Button size="sm" variant="ghost" disabled={working} onClick={() => act(() => api(`/orders/${o.id}`, { method: "PATCH", body: { status: "waiting" } }))}>Resume</Button>
           : o.status !== "done" && <Button size="sm" variant="ghost" disabled={working} onClick={() => act(() => api(`/orders/${o.id}`, { method: "PATCH", body: { status: "paused" } }))}>Pause</Button>}
+        <Button size="sm" variant="ghost" className="ml-auto text-red-600" disabled={working}
+          onClick={() => {
+            if (confirm(`Delete the ${o.agency_name} order (${o.industry}, ${o.location})? ${o.industry} in ${o.location} becomes free for another agency. A Google Sheet already made stays in your Drive.`))
+              act(() => api(`/orders/${o.id}`, { method: "DELETE" }));
+          }}>Delete</Button>
       </div>
       <ErrorNote error={err} />
     </li>

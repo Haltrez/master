@@ -329,3 +329,23 @@ def test_without_claude_the_keyword_check_keeps_garbage_out(store):
     add_leads(store, 1, label="Sales & Marketing - Leeds", title="Senior Sales Executive")
     add_leads(store, 1, label="Sales & Marketing - Leeds", title="Store Manager", start=5)
     assert O.fill_order(store, Settings(), o["id"])["sent"] == 1
+
+
+def test_delete_order_frees_the_territory(store):
+    o = make(store)
+    add_leads(store, 2, label="IT & Tech - Leeds")
+    O.fill_order(store, Settings(), o["id"])
+    assert O.delete_order(store, o["id"]) and O.get_order(store, o["id"]) is None
+    assert store.val("select count(*) from deliveries") == 0 and store.val("select count(*) from hot_leads") == 2
+    other = make(store, agency_name="Other Agency")   # no longer taken
+    assert other["agency_name"] == "Other Agency"
+    assert not O.delete_order(store, 999)
+
+
+def test_delete_keeps_the_client_while_it_has_other_orders(store):
+    a, b = make(store), make(store, leads_wanted=5)
+    O.delete_order(store, a["id"])
+    assert O.get_order(store, b["id"])["client_id"] == b["client_id"]
+    import pytest as _p
+    with _p.raises(TerritoryTaken):
+        make(store, agency_name="Other Agency")

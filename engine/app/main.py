@@ -1067,6 +1067,10 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         except ValueError as exc:
             raise HTTPException(422, str(exc))
 
+    @app.delete("/orders/{order_id}", dependencies=A, status_code=204)
+    def delete_order_ep(order_id: int):
+        O.delete_order(db(), order_id) or notfound("order")
+
     @app.post("/orders/{order_id}/send-more", dependencies=A, status_code=202)
     def send_more(order_id: int, bg: BackgroundTasks, collect: bool = True):
         s = db()

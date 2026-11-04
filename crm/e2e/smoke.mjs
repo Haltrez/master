@@ -109,6 +109,12 @@ try {
   await page.click("button:has-text('Create order & find leads')");
   await page.waitForSelector("text=already exclusive to Leeds Finance Recruitment");
   check(true, "a taken industry + region is refused");
+  page.once("dialog", (d) => d.accept());
+  await page.click("[data-testid=order] button:has-text('Delete')");
+  await page.waitForSelector("text=Orders (0)");
+  await page.click("button:has-text('Create order & find leads')");
+  await page.waitForSelector("[data-testid=order] >> text=Rival Recruitment");
+  check(true, "deleting an order frees its industry + region");
   await page.screenshot({ path: shots + "orders-desktop.png", fullPage: true });
 
   const phone = await browser.newPage({ ...playwright.devices["iPhone 13"], storageState: await page.context().storageState() });
