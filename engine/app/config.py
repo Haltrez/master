@@ -77,6 +77,7 @@ def _words(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     reed_api_key: str = ""
+    reed_base_url: str = "https://www.reed.co.uk/api/1.0"   # overridable for local end-to-end tests
     database_url: str = ""
     companies_house_api_key: str = ""
     adzuna_app_id: str = ""
@@ -115,6 +116,7 @@ def get_settings() -> Settings:
     load_dotenv(REPO_ROOT / ".env")
     return Settings(
         reed_api_key=os.environ.get("REED_API_KEY", "").strip(),
+        reed_base_url=os.environ.get("REED_BASE_URL", "").strip() or "https://www.reed.co.uk/api/1.0",
         database_url=os.environ.get("DATABASE_URL", "").strip(),
         companies_house_api_key=os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip(),
         adzuna_app_id=os.environ.get("ADZUNA_APP_ID", "").strip(),

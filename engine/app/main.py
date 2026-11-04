@@ -353,6 +353,18 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     def agencies(stage: str | None = None, search_id: int | None = None, q: str | None = None):
         return [agency_out(a) for a in db().agencies_list(stage=stage, search_id=search_id, q=q)]
 
+    class AgencyIn(BaseModel):
+        name: str
+        website: str | None = None
+
+    @app.post("/agencies", dependencies=A, status_code=201)
+    def create_agency(body: AgencyIn):
+        s = db()
+        a = s.create_agency(body.name.strip())
+        if body.website and not a.get("website"):
+            a = s.update_agency(a["id"], {"website": body.website})
+        return agency_out(a)
+
     @app.get("/agencies/{agency_id}", dependencies=A)
     def agency(agency_id: int):
         s = db()

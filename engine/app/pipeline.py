@@ -24,7 +24,8 @@ def make_reed(settings: Settings):
         return None
     from .reed_client import ReedClient
     return ReedClient(settings.reed_api_key, requests_per_second=settings.reed_requests_per_second,
-                      max_tries=settings.reed_max_tries, backoff_base=settings.reed_backoff_base_seconds)
+                      max_tries=settings.reed_max_tries, backoff_base=settings.reed_backoff_base_seconds,
+                      base_url=settings.reed_base_url)
 
 
 def make_adzuna(settings: Settings):
