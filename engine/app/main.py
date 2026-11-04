@@ -54,6 +54,8 @@ class Hooks:
     enrich: Callable[[PgStore, Settings, int], dict]
     role_services: Callable[[PgStore, Settings, bool], Any]
     post_webhook: Callable[[str, dict], None]
+    make_sheets: Callable[[PgStore, Settings], Any] | None = None     # None -> the owner's Google account
+    make_claude: Callable[[Settings], Any] | None = None              # None -> anthropic.Anthropic()
 
 
 def default_hooks() -> Hooks:
@@ -250,6 +252,36 @@ class FamilyIn(BaseModel):
 class AgencyIn(BaseModel):
     name: str
     website: str | None = None
+
+
+class OrderIn(BaseModel):
+    agency_name: str
+    industry: str
+    location: str
+    leads_wanted: int = 20
+    frequency: str = "once"
+    package: str = "sheet"
+    client_email: str | None = None
+    keywords: list[str] | None = None
+    radius_miles: int = 20
+
+
+class OrderPatch(BaseModel):
+    leads_wanted: int | None = None
+    frequency: str | None = None
+    client_email: str | None = None
+    status: str | None = None
+    package: str | None = None
+
+
+class GoogleExchangeIn(BaseModel):
+    code: str
+    redirect_uri: str
+
+
+class ChatIn(BaseModel):
+    message: str
+    conversation_id: str | None = None
 
 
 class LeadContactPatch(BaseModel):
@@ -766,7 +798,10 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         for name, key in keys.items():
             last = s.cache_get(f"source_status:{name}") if name not in ("companies house", "brave", "hunter") else None
             sources.append({"name": name, "key_set": bool(key), "last": last})
-        return {"settings": s.settings(), "sources": sources,
+        from .google_sheets import SETTING as GOOGLE_SETTING
+        return {"settings": {k: v for k, v in s.settings().items() if k != GOOGLE_SETTING}, "sources": sources,
+                "google": {**google_status(s), "client_set": bool(settings.google_client_id and settings.google_client_secret)},
+                "assistant": {"key_set": bool(settings.anthropic_api_key), "model": settings.assistant_model},
                 "configured": {k: bool(v) for k, v in keys.items()}}
 
     @app.patch("/settings", dependencies=A)
@@ -967,6 +1002,135 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                 s.finish_task(task_id, "error", error=str(exc))
         bg.add_task(work)
         return {"task_id": task_id, "status": "running"}
+
+    # -- lead orders (the simple flow) -------------------------------------------------------------
+    from . import orders as O
+    from .google_sheets import GoogleError, Sheets, auth_url, disconnect, exchange_code
+    from .google_sheets import status as google_status
+
+    def sheets_for(s: PgStore):
+        if hooks.make_sheets is not None:
+            return hooks.make_sheets(s, settings)
+        return Sheets.from_store(s, settings)
+
+    def fill(order_id: int, collect: bool = True) -> dict:
+        s = db()
+        return O.fill_order(s, settings, order_id, strict=strict(s), sheets=sheets_for(s),
+                            collect=(lambda st, se, sid: hooks.collect_one(st, se, sid, st.create_run(sid))) if collect else None)
+
+    def order_out(s: PgStore, o: dict) -> dict:
+        return {**o, "ready": O.ready_count(s, o, strict(s))}
+
+    def new_order(body: dict) -> dict:
+        try:
+            return O.create_order(db(), **body)
+        except ValueError as exc:
+            if isinstance(exc, TerritoryTaken):
+                raise
+            raise HTTPException(422, str(exc))
+
+    @app.get("/industries", dependencies=A)
+    def industries():
+        return [{"name": k, "keywords": v} for k, v in O.INDUSTRIES.items()]
+
+    @app.get("/orders", dependencies=A)
+    def orders_list(status: str | None = None):
+        s = db()
+        return [order_out(s, o) for o in O.list_orders(s, status)]
+
+    @app.post("/orders", dependencies=A, status_code=201)
+    def create_order_ep(body: OrderIn, bg: BackgroundTasks):
+        o = new_order(body.model_dump())
+        bg.add_task(fill, o["id"], True)
+        return o
+
+    @app.get("/orders/{order_id}", dependencies=A)
+    def order_ep(order_id: int):
+        s = db()
+        return order_out(s, O.get_order(s, order_id) or notfound("order"))
+
+    @app.patch("/orders/{order_id}", dependencies=A)
+    def patch_order(order_id: int, body: OrderPatch):
+        s = db()
+        O.get_order(s, order_id) or notfound("order")
+        try:
+            return O.update_order(s, order_id, body.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @app.post("/orders/{order_id}/send-more", dependencies=A, status_code=202)
+    def send_more(order_id: int, bg: BackgroundTasks, collect: bool = True):
+        s = db()
+        o = O.get_order(s, order_id) or notfound("order")
+        if o["status"] == "paused":
+            raise HTTPException(409, "order is paused: resume it first")
+        if o["status"] == "done":
+            raise HTTPException(409, "order is complete: raise its number of leads first")
+        bg.add_task(fill, order_id, collect)
+        return {"order_id": order_id, "status": "running"}
+
+    @app.get("/orders/{order_id}/leads.csv", dependencies=A)
+    def order_csv(order_id: int):
+        s = db()
+        o = O.get_order(s, order_id) or notfound("order")
+        rows = O.order_lead_rows(s, order_id)
+        csv_text = to_csv(O.SHEET_HEADERS, [dict(zip(O.SHEET_HEADERS, O.sheet_row(r))) for r in rows])
+        name = "".join(ch if ch.isalnum() else "-" for ch in f"{o['agency_name']}-{o['industry']}-{o['location']}").lower()
+        return Response(content="\ufeff" + csv_text, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename={name}.csv"})
+
+    # -- Google -------------------------------------------------------------------------------------
+    @app.get("/google/status", dependencies=A)
+    def google_status_ep():
+        return {**google_status(db()), "client_set": bool(settings.google_client_id and settings.google_client_secret)}
+
+    @app.get("/google/auth-url", dependencies=A)
+    def google_auth_url(redirect_uri: str, state: str):
+        if not settings.google_client_id:
+            raise HTTPException(400, "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set on the server")
+        return {"url": auth_url(settings.google_client_id, redirect_uri, state)}
+
+    @app.post("/google/exchange", dependencies=A)
+    def google_exchange(body: GoogleExchangeIn):
+        if not (settings.google_client_id and settings.google_client_secret):
+            raise HTTPException(400, "GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set on the server")
+        try:
+            return exchange_code(db(), settings.google_client_id, settings.google_client_secret, body.code,
+                                 body.redirect_uri)
+        except GoogleError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/google/disconnect", dependencies=A)
+    def google_disconnect():
+        disconnect(db())
+        return {"connected": False}
+
+    # -- AI assistant -------------------------------------------------------------------------------
+    from . import assistant as AI
+
+    def claude():
+        if hooks.make_claude is not None:
+            return hooks.make_claude(settings)
+        if not settings.anthropic_api_key:
+            raise HTTPException(400, "ANTHROPIC_API_KEY is not set on the server")
+        import anthropic
+        return anthropic.Anthropic(api_key=settings.anthropic_api_key, max_retries=3)
+
+    def toolbox(s: PgStore, bg: BackgroundTasks) -> AI.Toolbox:
+        return AI.Toolbox(store=s, settings=settings, strict=strict(s), new_order=new_order,
+                          start_fill=lambda oid, collect=True: bg.add_task(fill, oid, collect),
+                          order_out=lambda o: order_out(s, o), google=lambda: google_status(s))
+
+    @app.post("/assistant/chat", dependencies=A)
+    def assistant_chat(body: ChatIn, bg: BackgroundTasks):
+        if not body.message.strip():
+            raise HTTPException(422, "message is empty")
+        s = db()
+        return AI.chat(s, claude(), settings.assistant_model, toolbox(s, bg), body.message, body.conversation_id)
+
+    @app.get("/assistant/conversations/{conversation_id}", dependencies=A)
+    def assistant_history(conversation_id: str):
+        return {"conversation_id": conversation_id, "messages": AI.visible_history(db(), conversation_id)}
 
     return app
 

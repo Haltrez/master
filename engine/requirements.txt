@@ -5,3 +5,4 @@ psycopg[binary]>=3.2,<4
 fastapi>=0.115,<1
 uvicorn>=0.30,<1
 pytest>=8,<10
+anthropic>=2.4,<3

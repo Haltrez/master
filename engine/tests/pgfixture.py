@@ -63,7 +63,8 @@ def pg_dsn():
 TABLES = ("deliveries", "client_territories", "clients", "activities", "contacts", "agency_searches", "agencies",
           "hot_lead_searches", "hot_leads", "employer_overrides", "listing_searches", "listings", "runs", "searches",
           "templates", "brief_matches", "candidate_briefs", "employer_jobs", "employers", "role_families",
-          "http_cache", "suppression_list", "app_settings", "tasks", "app_users", "lead_contacts", "archive_evidence")
+          "http_cache", "suppression_list", "app_settings", "tasks", "app_users", "lead_contacts", "archive_evidence",
+          "lead_orders", "assistant_messages")
 
 
 @pytest.fixture

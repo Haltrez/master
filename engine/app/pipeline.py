@@ -98,3 +98,11 @@ def collect_all(store, settings: Settings, run_ids: dict[int, int] | None = None
     return run_all(repo=store, reed=reed, settings=settings, adzuna=adzuna, run_ids=run_ids,
                    theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings),
                    after_run=lambda r: rebuild_all(store, settings, reed))
+
+
+def top_up_orders(store, settings: Settings) -> list[dict]:
+    """Send what every open lead order still owes (after the daily collection)."""
+    from .google_sheets import Sheets
+    from .orders import top_up_all
+    strict = store.setting("verified_companies_only", True)
+    return top_up_all(store, settings, sheets=Sheets.from_store(store, settings), strict=True if strict is None else bool(strict))

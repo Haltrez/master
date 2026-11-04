@@ -92,6 +92,10 @@ class Settings:
     apify_indeed_max_items: int = 300         # per keyword per run (~$0.03 per 300)
     brave_api_key: str = ""
     hunter_api_key: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    anthropic_api_key: str = ""
+    assistant_model: str = "claude-opus-5-5"
     engine_api_secret: str = ""
     enable_docs: bool = False
     owner_email: str = ""
@@ -110,7 +114,8 @@ class Settings:
     def secret_values(self) -> list[str]:
         return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.theirstack_api_key, self.careerjet_api_key,
                             self.jooble_api_key, self.apify_token, self.brave_api_key,
-                            self.hunter_api_key, self.engine_api_secret, _db_password(self.database_url)) if s]
+                            self.hunter_api_key, self.google_client_secret, self.anthropic_api_key,
+                            self.engine_api_secret, _db_password(self.database_url)) if s]
 
 
 def _db_password(url: str) -> str:
@@ -144,6 +149,10 @@ def get_settings() -> Settings:
         theirstack_backfill_days=_int("THEIRSTACK_BACKFILL_DAYS", 90),
         brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip(),
         hunter_api_key=os.environ.get("HUNTER_API_KEY", "").strip(),
+        google_client_id=os.environ.get("GOOGLE_CLIENT_ID", "").strip(),
+        google_client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", "").strip(),
+        anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", "").strip(),
+        assistant_model=os.environ.get("ASSISTANT_MODEL", "").strip() or "claude-opus-5-5",
         engine_api_secret=os.environ.get("ENGINE_API_SECRET", "").strip(),
         enable_docs=os.environ.get("ENABLE_DOCS", "").strip().lower() in ("1", "true", "yes"),
         owner_email=os.environ.get("OWNER_EMAIL", "").strip(),

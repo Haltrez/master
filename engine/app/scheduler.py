@@ -12,7 +12,7 @@ import time
 from zoneinfo import ZoneInfo
 
 from .config import get_settings, setup_logging
-from .pipeline import collect_all, make_store
+from .pipeline import collect_all, make_store, top_up_orders
 
 UK = ZoneInfo("Europe/London")
 log = logging.getLogger("scheduler")
@@ -34,8 +34,10 @@ def main() -> None:
         log.info("next collection at %s", nxt.isoformat())
         time.sleep(max(1, (nxt - now).total_seconds()))
         try:
-            results = collect_all(make_store(settings), settings)
+            store = make_store(settings)
+            results = collect_all(store, settings)
             log.info("collection done: %s", [(r.search_id, r.status) for r in results])
+            log.info("orders topped up: %s", [(o["order_id"], o["sent"], o["status"]) for o in top_up_orders(store, settings)])
         except Exception:
             log.exception("scheduled collection failed")
 
