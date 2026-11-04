@@ -29,6 +29,7 @@ class RunResult:
     adzuna_calls: int = 0
     theirstack_jobs: int = 0
     by_source: dict[str, int] = field(default_factory=dict)
+    source_errors: dict[str, str] = field(default_factory=dict)
     error: str | None = None
     by_posted_by: dict[str, int] = field(default_factory=lambda: {"employer": 0, "agency": 0})
     after_run: dict[str, Any] = field(default_factory=dict)
@@ -159,6 +160,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
                          run_id, job.employer_name, job.job_id, queried_as, posted_by, reason)
             rows[job.job_id] = listing_row(job, posted_by, source)
             seen[job.job_id] = posted_by
+        result.by_source[source] = result.by_source.get(source, 0) + len(page)
         if rows:
             result.new_listings += repo.upsert_listings(search_id, list(rows.values()))
 
@@ -168,71 +170,100 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
         if reed is None and adzuna is None and theirstack is None and not extra_sources:
             raise ValueError("no job source configured (set REED_API_KEY and/or ADZUNA_APP_ID/ADZUNA_APP_KEY)")
         overrides = repo.get_overrides()
-        reed_known = repo.known_agency_norms() if hasattr(repo, "known_agency_norms") else None
-        if reed is not None:
-            for keyword in search.keywords:
-                for queried_as in ("employer", "agency"):
-                    for page in reed.iter_search_pages(keyword, search.location, search.radius_miles,
-                                                       search.min_salary, queried_as, budget=budget):  # type: ignore[arg-type]
-                        store_page(page, queried_as, "reed", reed_known)  # type: ignore[arg-type]
-        if adzuna is not None:
-            known = set(settings.known_agency_brands)
+        has_cache = hasattr(repo, "cache_get")
+
+        def known_agencies() -> set[str]:
+            k = set(settings.known_agency_brands)
             if hasattr(repo, "known_agency_norms"):
-                known |= repo.known_agency_norms()
+                k |= repo.known_agency_norms()
+            return k
+
+        attempted: list[str] = []
+
+        def run_source(name: str, work: Callable[[], None]) -> None:
+            """Each source on its own: one failing (bad key, quota) never stops the others.
+            The outcome is saved for the Settings page."""
+            attempted.append(name)
+            before = result.by_source.get(name, 0)
+            status: dict[str, Any] = {"at": dt.datetime.now(dt.timezone.utc).isoformat(), "search_id": search_id}
             try:
-                flag = f"adzuna:backfilled:{search_id}"
-                seen_before = hasattr(repo, "cache_get") and repo.cache_get(flag) is not None
+                work()
+                status.update(ok=True, ads=result.by_source.get(name, 0) - before)
+            except Exception as exc:
+                log.warning("run %d: %s failed: %s", run_id, name, exc)
+                status.update(ok=False, error=str(exc)[:300] or type(exc).__name__,
+                              ads=result.by_source.get(name, 0) - before)
+                result.source_errors[name] = status["error"]
+            if hasattr(repo, "cache_set"):
+                repo.cache_set(f"source_status:{name}", status)
+
+        def backfill_flag(name: str) -> tuple[str, bool]:
+            flag = f"{name}:backfilled:{search_id}"
+            return flag, bool(has_cache and repo.cache_get(flag) is not None)
+
+        def mark_backfilled(flag: str) -> None:
+            if hasattr(repo, "cache_set"):
+                repo.cache_set(flag, {"at": dt.datetime.now(dt.timezone.utc).isoformat()})
+
+        if reed is not None:
+            reed_known = repo.known_agency_norms() if hasattr(repo, "known_agency_norms") else None
+
+            def do_reed():
+                for keyword in search.keywords:
+                    for queried_as in ("employer", "agency"):
+                        for page in reed.iter_search_pages(keyword, search.location, search.radius_miles,
+                                                           search.min_salary, queried_as, budget=budget):  # type: ignore[arg-type]
+                            store_page(page, queried_as, "reed", reed_known)  # type: ignore[arg-type]
+            run_source("reed", do_reed)
+
+        if adzuna is not None:
+            def do_adzuna():
+                known = known_agencies()
+                flag, seen_before = backfill_flag("adzuna")
                 for keyword in search.keywords:
                     for page in adzuna.iter_search_pages(keyword, search.location, search.radius_miles,
                                                          search.min_salary, budget=adz_budget,
                                                          max_days_old=3 if seen_before else 30):
                         store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", "adzuna", known)
-                if hasattr(repo, "cache_set"):
-                    repo.cache_set(flag, {"at": dt.datetime.now(dt.timezone.utc).isoformat()})
-            except ReedError as exc:
-                # Adzuna is a second source: a failure there doesn't fail the run.
-                log.warning("run %d: adzuna stopped early: %s", run_id, exc)
+                mark_backfilled(flag)
+            run_source("adzuna", do_adzuna)
+
         if theirstack is not None:
-            known = set(settings.known_agency_brands)
-            if hasattr(repo, "known_agency_norms"):
-                known |= repo.known_agency_norms()
-            # First run of a search pulls history (so reposts show from day one); later runs the last 3 days.
-            flag = f"theirstack:backfilled:{search_id}"
-            has_cache = hasattr(repo, "cache_get")
-            backfilled = has_cache and repo.cache_get(flag) is not None
-            days = 3 if backfilled else settings.theirstack_backfill_days
-            if geocoder is None and has_cache:
-                from .geo import Geocoder
-                geocoder = Geocoder(repo)
-            place = geocoder.geocode(search.location) if geocoder else None
-            center = (place.lat, place.lng) if place else None
-            try:
+            def do_theirstack():
+                nonlocal geocoder
+                known = known_agencies()
+                # First run of a search pulls history (so reposts show from day one); later runs the last 3 days.
+                flag, backfilled = backfill_flag("theirstack")
+                days = 3 if backfilled else settings.theirstack_backfill_days
+                if geocoder is None and has_cache:
+                    from .geo import Geocoder
+                    geocoder = Geocoder(repo)
+                place = geocoder.geocode(search.location) if geocoder else None
+                center = (place.lat, place.lng) if place else None
                 for page in theirstack.iter_search_pages(list(search.keywords), max_age_days=days,
                                                          max_jobs=settings.theirstack_max_jobs_per_run):
                     near = [j for j in page if _near(j, center, search.radius_miles * 1.2, search.location)]
                     result.theirstack_jobs += len(page)
                     store_page(near, "employer", "theirstack", known)
-                if has_cache:
-                    repo.cache_set(flag, {"at": dt.datetime.now(dt.timezone.utc).isoformat()})
-            except ReedError as exc:
-                log.warning("run %d: theirstack stopped early: %s", run_id, exc)
+                mark_backfilled(flag)
+            run_source("theirstack", do_theirstack)
+
         for src in extra_sources or []:
-            known = set(settings.known_agency_brands)
-            if hasattr(repo, "known_agency_norms"):
-                known |= repo.known_agency_norms()
-            has_cache = hasattr(repo, "cache_get")
-            flag = f"{src.name}:backfilled:{search_id}"
-            first_run = not (has_cache and repo.cache_get(flag) is not None)
-            try:
+            def do_extra(src=src):
+                known = known_agencies()
+                flag, seen_before = backfill_flag(src.name)
                 for keyword in search.keywords:
-                    for page in src.pages(keyword, search.location, search.radius_miles, first_run):
-                        page = [j for j in page if title_matches(keyword, j.job_title)]
-                        result.by_source[src.name] = result.by_source.get(src.name, 0) + len(page)
-                        store_page(page, "employer", src.name, known)
-                if has_cache:
-                    repo.cache_set(flag, {"at": dt.datetime.now(dt.timezone.utc).isoformat()})
-            except ReedError as exc:
-                log.warning("run %d: %s stopped early: %s", run_id, src.name, exc)
+                    for page in src.pages(keyword, search.location, search.radius_miles, not seen_before):
+                        store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", src.name, known)
+                mark_backfilled(flag)
+            run_source(src.name, do_extra)
+
+        # Reed is the main source: its failure (bad key, call cap) marks the run as an error.
+        # Other sources failing (e.g. a used-up quota) only shows on the Settings page.
+        if "reed" in result.source_errors:
+            raise ReedError(result.source_errors["reed"])
+        if attempted and len(result.source_errors) == len(attempted):
+            raise ReedError("every source failed: " + "; ".join(f"{k}: {v}" for k, v in result.source_errors.items()))
         result.status = "ok"
     except Exception as exc:
         result.status = "error"

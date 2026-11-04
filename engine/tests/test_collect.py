@@ -185,3 +185,29 @@ def test_agency_wording_in_ad_text(sample, text, agency):
 def test_title_matches(kw, title, ok):
     from app.collect import title_matches
     assert title_matches(kw, title) is ok
+
+
+
+def test_one_source_failing_never_stops_the_others_and_status_is_saved(store, sample):
+    from app.collect import run_search
+    from app.config import Settings
+    from app.reed_client import ReedClient, ReedError
+    from tests.conftest import FakeReed
+
+    class Broken:
+        name = "jooble"
+
+        def pages(self, *a):
+            raise ReedError("Jooble refused the key (403)")
+            yield []
+
+    s = store.create_search("A", ["management accountant"], "Leeds", 15, None)
+    reed = ReedClient(TEST_KEY, transport=FakeReed({("management accountant", "employer"): sample["results"][:2]}).transport,
+                      requests_per_second=0, sleep=lambda x: None)
+    r = run_search(s.id, repo=store, reed=reed, settings=Settings(reed_api_key=TEST_KEY, reed_requests_per_second=0),
+                   extra_sources=[Broken()])
+    assert r.status == "ok" and r.by_source["reed"] == 2
+    assert r.source_errors == {"jooble": "Jooble refused the key (403)"}
+    assert store.cache_get("source_status:reed")["ok"] is True and store.cache_get("source_status:reed")["ads"] == 2
+    assert store.cache_get("source_status:jooble") == {**store.cache_get("source_status:jooble"), "ok": False,
+                                                       "error": "Jooble refused the key (403)"}

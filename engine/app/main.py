@@ -758,13 +758,16 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.get("/settings", dependencies=A)
     def get_settings_ep():
         s = db()
-        return {"settings": s.settings(),
-                "configured": {"reed": bool(settings.reed_api_key), "adzuna": bool(settings.adzuna_app_id),
-                               "theirstack": bool(settings.theirstack_api_key),
-                               "careerjet": bool(settings.careerjet_api_key), "jooble": bool(settings.jooble_api_key),
-                               "indeed (apify)": bool(settings.apify_token),
-                               "companies_house": bool(settings.companies_house_api_key),
-                               "brave": bool(settings.brave_api_key), "hunter": bool(settings.hunter_api_key)}}
+        keys = {"reed": settings.reed_api_key, "adzuna": settings.adzuna_app_id and settings.adzuna_app_key,
+                "careerjet": settings.careerjet_api_key, "jooble": settings.jooble_api_key, "indeed": settings.apify_token,
+                "theirstack": settings.theirstack_api_key, "companies house": settings.companies_house_api_key,
+                "brave": settings.brave_api_key, "hunter": settings.hunter_api_key}
+        sources = []
+        for name, key in keys.items():
+            last = s.cache_get(f"source_status:{name}") if name not in ("companies house", "brave", "hunter") else None
+            sources.append({"name": name, "key_set": bool(key), "last": last})
+        return {"settings": s.settings(), "sources": sources,
+                "configured": {k: bool(v) for k, v in keys.items()}}
 
     @app.patch("/settings", dependencies=A)
     def patch_settings(body: dict[str, Any]):

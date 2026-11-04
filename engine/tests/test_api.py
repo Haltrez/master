@@ -344,7 +344,9 @@ def test_settings(api):
     s = api.patch("/settings", headers=H, json={"daily_outreach_target": 120, "repost_threshold": 2}).json()
     assert s["daily_outreach_target"] == 120 and s["repost_threshold"] == 2
     assert api.patch("/settings", headers=H, json={"hack": 1}).status_code == 422
-    assert api.get("/settings", headers=H).json()["configured"]["companies_house"] is True
+    got = api.get("/settings", headers=H).json()
+    assert got["configured"]["companies house"] is True and got["configured"]["theirstack"] is False
+    assert {x["name"]: x["key_set"] for x in got["sources"]}["reed"] is False
 
 
 def test_role_match_endpoints(api, store, calls):
