@@ -105,4 +105,6 @@ def top_up_orders(store, settings: Settings) -> list[dict]:
     from .google_sheets import Sheets
     from .orders import top_up_all
     strict = store.setting("verified_companies_only", True)
-    return top_up_all(store, settings, sheets=Sheets.from_store(store, settings), strict=True if strict is None else bool(strict))
+    from .fit import make_client
+    return top_up_all(store, settings, sheets=Sheets.from_store(store, settings), strict=True if strict is None else bool(strict),
+                      claude=make_client(settings))

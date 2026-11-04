@@ -1017,8 +1017,15 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     def fill(order_id: int, collect: bool = True) -> dict:
         s = db()
-        return O.fill_order(s, settings, order_id, strict=strict(s), sheets=sheets_for(s),
+        return O.fill_order(s, settings, order_id, strict=strict(s), sheets=sheets_for(s), claude=fit_client(),
                             collect=(lambda st, se, sid: hooks.collect_one(st, se, sid, st.create_run(sid))) if collect else None)
+
+    def fit_client():
+        """Claude Haiku for the industry check (tests: hooks.make_claude; None -> keyword check)."""
+        if hooks.make_claude is not None:
+            return hooks.make_claude(settings)
+        from .fit import make_client
+        return make_client(settings)
 
     def order_out(s: PgStore, o: dict) -> dict:
         return {**o, "ready": O.ready_count(s, o, strict(s))}

@@ -293,3 +293,39 @@ def test_assistant_without_key_says_so(store):
     c = TestClient(create_app(Settings(engine_api_secret=SECRET), store=store))
     r = c.post("/assistant/chat", headers=H, json={"message": "hi"})
     assert r.status_code == 400 and "ANTHROPIC_API_KEY" in r.json()["detail"]
+
+
+class FakeHaiku:
+    """Says yes to titles containing 'sales'; records each call."""
+
+    def __init__(self):
+        self.calls = []
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kw):
+        self.calls.append(kw)
+        assert kw["model"] == "claude-haiku-5-5" and kw["output_config"]["format"]["type"] == "json_schema"
+        lines = kw["messages"][0]["content"].split("\n")
+        titles = [l.split(". ", 1)[1] for l in lines if l[:1].isdigit() and ". " in l]
+        fits = [i for i, t in enumerate(titles) if "sales" in t.lower()]
+        return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps({"fits": fits}))])
+
+
+def test_only_leads_that_fit_the_industry_are_sent_and_verdicts_are_cached(store):
+    o = make(store, industry="Sales & Marketing", leads_wanted=10)
+    label = "Sales & Marketing - Leeds"
+    add_leads(store, 2, label=label, title="Field Sales Executive")
+    add_leads(store, 3, label=label, title="Retail Optical Assistant", start=10)
+    haiku = FakeHaiku()
+    r = O.fill_order(store, Settings(), o["id"], claude=haiku)
+    assert r["sent"] == 2 and len(haiku.calls) == 1
+    add_leads(store, 1, label=label, title="Retail Optical Assistant", start=20)
+    O.fill_order(store, Settings(), o["id"], claude=haiku)
+    assert len(haiku.calls) == 1   # titles judged once, then cached
+
+
+def test_without_claude_the_keyword_check_keeps_garbage_out(store):
+    o = make(store, industry="Sales & Marketing", leads_wanted=10)
+    add_leads(store, 1, label="Sales & Marketing - Leeds", title="Senior Sales Executive")
+    add_leads(store, 1, label="Sales & Marketing - Leeds", title="Store Manager", start=5)
+    assert O.fill_order(store, Settings(), o["id"])["sent"] == 1

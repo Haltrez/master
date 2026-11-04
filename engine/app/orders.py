@@ -27,7 +27,8 @@ INDUSTRIES: dict[str, list[str]] = {
     "Engineering & Manufacturing": ["mechanical engineer", "electrical engineer", "maintenance engineer",
                                     "quality engineer", "production manager", "cnc"],
     "Construction & Property": ["site manager", "quantity surveyor", "estimator", "contracts manager", "building surveyor"],
-    "Sales & Marketing": ["sales executive", "business development", "account manager", "marketing manager",
+    "Sales & Marketing": ["sales executive", "sales manager", "sales consultant", "business development",
+                          "account manager", "marketing manager",
                           "marketing executive"],
     "HR": ["hr advisor", "hr manager", "hr business partner", "hr administrator"],
     "Legal": ["solicitor", "paralegal", "legal secretary", "conveyancer"],
@@ -78,15 +79,23 @@ def list_orders(store, status: str | None = None) -> list[dict]:
     return store.q(ORDER_SQL + " order by o.id desc")
 
 
+def _fitting(store, order: dict, leads: list[dict], claude) -> list[dict]:
+    """Only roles that belong to the order's industry (Claude Haiku, cached; keyword check without a key)."""
+    from .fit import filter_fitting
+    search = store.search_row(order["search_id"]) if order.get("search_id") else None
+    keywords = list((search or {}).get("keywords") or keywords_for(order["industry"]))
+    return filter_fitting(store, claude, order["industry"], keywords, leads)
+
+
 def ready_count(store, order: dict, strict: bool = True) -> int:
-    """Verified leads found but not yet sent for this order's client."""
+    """Verified, on-industry leads found but not yet sent (no paid calls: known verdicts or the keyword check)."""
     if not order.get("client_id"):
         return 0
     leads = store.undelivered_leads(order["client_id"], 1000)
     if strict:
         ok = store.verified_employer_norms([l["employer_norm"] for l in leads])
         leads = [l for l in leads if l["employer_norm"] in ok]
-    return len(leads)
+    return len(_fitting(store, order, leads, None))
 
 
 def order_lead_rows(store, order_id: int) -> list[dict[str, Any]]:
@@ -175,7 +184,7 @@ def _set(store, order_id: int, **fields) -> None:
 
 
 def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, int], Any] | None = None,
-               sheets=None, strict: bool = True, now: dt.datetime | None = None) -> dict[str, Any]:
+               sheets=None, strict: bool = True, now: dt.datetime | None = None, claude=None) -> dict[str, Any]:
     """Collect (when `collect` is given), then send up to the number still owed. Safe to call any time."""
     now = now or _now()
     o = get_order(store, order_id)
@@ -197,7 +206,7 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
             if strict:
                 ok = store.verified_employer_norms([l["employer_norm"] for l in leads])
                 leads = [l for l in leads if l["employer_norm"] in ok]
-            leads = sorted(leads, key=lambda l: -l["score"])[:owed]
+            leads = _fitting(store, o, sorted(leads, key=lambda l: -l["score"])[:400], claude)[:owed]
             rows = lead_rows(store, leads, now.date())
             if sheets is not None:
                 if not o.get("sheet_id"):
@@ -239,9 +248,9 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
         return {"order_id": order_id, "sent": 0, "status": "error", "note": str(exc)}
 
 
-def top_up_all(store, settings, sheets=None, strict: bool = True) -> list[dict]:
+def top_up_all(store, settings, sheets=None, strict: bool = True, claude=None) -> list[dict]:
     """After the daily collection: send what's owed on every open order (no extra collection)."""
     out = []
     for o in store.q("select id from lead_orders where status in ('collecting', 'waiting', 'error') order by id"):
-        out.append(fill_order(store, settings, o["id"], sheets=sheets, strict=strict))
+        out.append(fill_order(store, settings, o["id"], sheets=sheets, strict=strict, claude=claude))
     return out
