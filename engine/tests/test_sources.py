@@ -72,7 +72,7 @@ INDEED = [{"key": "abc123", "url": "https://uk.indeed.com/viewjob?jk=abc123", "t
            "location": {"city": "Leeds", "latitude": 53.8, "longitude": -1.55},
            "employer": {"name": "Euro Car Parks", "corporateWebsite": "https://eurocarparks.com"},
            "baseSalary": {"min": 40000, "max": 46000, "unitOfWork": "YEAR"}, "description": {"text": "We're hiring"}},
-          {"key": "def456", "url": "https://uk.indeed.com/viewjob?jk=def456", "title": "Accountant",
+          {"key": "def456", "url": "https://uk.indeed.com/viewjob?jk=def456", "title": "Management Accountant",
            "datePublished": "2026-10-20T05:00:00.000Z", "location": {"city": "Leeds"},
            "employer": {"name": "Harper Lane"}, "description": {"text": "Our client is a leading manufacturer"}}]
 
