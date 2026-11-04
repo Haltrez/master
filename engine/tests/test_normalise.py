@@ -55,6 +55,8 @@ def test_reposts_of_the_same_role_normalise_identically(title, loc):
     ("M&E Project Manager", "m and e project manager"),
     ("Payroll Administrator £12.50 per hour", "payroll administrator"),
     ("Purchase Ledger Clerk / Accounts Payable", "purchase ledger clerk accounts payable"),
+    ("Estimator (Mechanical)", "estimator mechanical"),        # real Reed title: discipline kept
+    ("Estimator (Electrical) - Hybrid (Leeds)", "estimator electrical"),
 ])
 def test_title_norm_keeps_role_and_seniority(title, norm):
     assert title_norm(title) == norm
@@ -70,6 +72,9 @@ def test_seniority_makes_different_keys():
 @pytest.mark.parametrize("raw,norm", [
     ("Leeds", "leeds"), ("Leeds, West Yorkshire", "leeds"), ("Leeds LS1 4AP", "leeds"),
     ("Manchester City Centre", "manchester"), ("Milton Keynes", "milton keynes"), (None, ""), ("", ""),
+    # real Reed values: postcodes only
+    ("M53EB", "manchester"), ("WA20YL", "warrington"), ("L249PB", "liverpool"), ("LS277FN", "leeds"),
+    ("M25 3AG", "manchester"), ("WA2", "warrington"),
 ])
 def test_location_norm(raw, norm):
     assert location_norm(raw) == norm
@@ -79,3 +84,8 @@ def test_lead_key():
     k = lead_key("harlow group", "management accountant", "leeds")
     assert k == lead_key("harlow group", "management accountant", "leeds") and len(k) == 40
     assert k != lead_key("harlow group", "senior management accountant", "leeds")
+
+
+def test_postcode_and_town_give_the_same_lead_key():
+    assert location_norm("M53EB") == location_norm("Manchester")
+    assert title_norm("Estimator (Mechanical)") != title_norm("Estimator (Electrical)")

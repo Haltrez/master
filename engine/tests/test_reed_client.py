@@ -154,3 +154,25 @@ def test_get_details(clock):
 def test_missing_key():
     with pytest.raises(ReedError):
         ReedClient("")
+
+
+def test_real_reed_responses_parse_and_classify():
+    """Real Reed data (4 Nov 2026): every result parses; postcodes become towns; agencies are caught."""
+    import json
+    from pathlib import Path
+
+    from app.collect import agency_name_pattern, classify
+    from app.config import DEFAULT_AGENCY_NAME_WORDS
+    from app.normalise import location_norm
+
+    real = json.loads((Path(__file__).parent / "fixtures" / "reed_search_real.json").read_text())
+    pat = agency_name_pattern(DEFAULT_AGENCY_NAME_WORDS)
+    emp = [ReedJob.from_api(i) for i in real["employer"]["results"]]
+    ag = [ReedJob.from_api(i) for i in real["agency"]["results"]]
+    assert len(emp) == real["employer"]["totalResults"] and len(ag) == real["agency"]["totalResults"]
+    assert all(j.posted_date and j.job_url and j.employer_name for j in emp + ag)
+    assert all(location_norm(j.location_name) for j in emp + ag)          # no empty towns from postcodes
+    # "Untapped Potential Recruitment" came back from the direct-employer query
+    by_name = {j.employer_name: classify(j, "employer", {}, pat)[0] for j in emp}
+    assert by_name["Untapped Potential Recruitment"] == "agency"
+    assert by_name["OC Motor Repairs Ltd"] == "employer"
