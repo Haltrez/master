@@ -32,6 +32,9 @@ log = logging.getLogger("detect")
 
 LONG_OPEN_DAYS = 30
 LIVE_SLACK = dt.timedelta(hours=1)
+# An ad only counts as "ended" once we've stopped seeing it for this long before the next one appears.
+# (Within one run ads are seen seconds apart: that is the same ad in several places, not a repost.)
+REPOST_GAP = dt.timedelta(days=2)
 DEFAULT_LIVE_WINDOW = dt.timedelta(hours=36)
 
 
@@ -80,7 +83,7 @@ def _reposted(ls: list[Listing]) -> bool:
         group.sort(key=lambda l: l.first_seen_at)
         earliest_end = None
         for l in group:
-            if earliest_end is not None and earliest_end < l.first_seen_at:
+            if earliest_end is not None and earliest_end + REPOST_GAP <= l.first_seen_at:
                 return True
             earliest_end = l.last_seen_at if earliest_end is None else min(earliest_end, l.last_seen_at)
     return False

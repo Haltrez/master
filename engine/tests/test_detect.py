@@ -140,3 +140,14 @@ def test_rebuild_on_postgres_keeps_owner_status_and_skips_agencies(store):
     store.q("update hot_leads set status = 'new'")
     rebuild_hot_leads(store)
     assert store.val("select count(*) from hot_leads") == 0
+
+
+def test_same_ad_in_several_places_in_one_run_is_not_a_repost():
+    import dataclasses
+    base = L(0, 0)
+    ls = [dataclasses.replace(base, job_id=i, first_seen_at=NOW + dt.timedelta(seconds=i),
+                              last_seen_at=NOW + dt.timedelta(seconds=i)) for i in range(10)]
+    later = NOW + dt.timedelta(minutes=1)
+    assert compute_hot_leads(ls, {}, later, threshold=2, reposts_only=True) == []
+    gone = L(20, 10, 6)   # an earlier ad we saw end 6 days ago
+    assert len(compute_hot_leads(ls + [gone], {}, later, threshold=2, reposts_only=True)) == 1
