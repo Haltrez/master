@@ -60,6 +60,14 @@ end $$;
 insert into app_settings (key, value) values
   ('repost_threshold', '3'),
   ('daily_outreach_target', '100'),
-  ('sender_name', '"Robert"'),
+  ('sender_name', '"Roberts"'),
   ('make_webhooks', '{}')
 on conflict (key) do nothing;
+
+-- Role Match: what the client-facing CSV / sheet shows, stored with the match.
+alter table brief_matches add column if not exists signal text;
+alter table brief_matches add column if not exists open_since_label text;
+alter table brief_matches add column if not exists location_label text;
+
+-- When a lead first became hot (the morning digest lists new ones).
+alter table hot_leads add column if not exists created_at timestamptz not null default now();

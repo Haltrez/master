@@ -476,7 +476,12 @@ def run_match(svc: Services, agency_name: str, use_reed: bool = True) -> MatchRe
             report.rows.append(m)
             repo.upsert_match({"brief_id": m.brief["id"], "employer_job_id": j["id"], "score": m.result.points,
                                "reasons": m.result.reasons,
-                               "distance_miles": round(m.distance, 1) if m.distance is not None else None})
+                               "distance_miles": round(m.distance, 1) if m.distance is not None else None,
+                               "signal": signal(m), "open_since_label": m.open_since_label,
+                               "location_label": m.location_label})
+    for b in briefs:
+        d = report.demand.get(b["id"])
+        repo.cache_set(f"demand:{b['id']}", {"sentence": demand_sentence(b, d, report.regions.get(b["id"]))})
     report.rows.sort(key=lambda r: (r.brief["label"].lower(), -r.result.points,
                                     r.distance if r.distance is not None else 1e9))
     return report

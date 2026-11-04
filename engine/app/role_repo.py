@@ -168,7 +168,8 @@ class LocalRoleRepo:
     def upsert_match(self, row):
         for r in self.t["brief_matches"]:
             if r["brief_id"] == row["brief_id"] and r["employer_job_id"] == row["employer_job_id"]:
-                r.update({k: row[k] for k in ("score", "reasons", "distance_miles")})
+                r.update({k: row.get(k) for k in ("score", "reasons", "distance_miles", "signal", "open_since_label",
+                                                  "location_label")})
                 return dict(r)
         return dict(self._insert("brief_matches", {"status": "new", "first_matched_at": self._now(), **row}))
 

@@ -211,10 +211,13 @@ class _CoreStore:
 
     def upsert_match(self, row: dict) -> dict:
         return self.one(
-            "insert into brief_matches (brief_id, employer_job_id, score, reasons, distance_miles) "
-            "values (%(brief_id)s, %(employer_job_id)s, %(score)s, %(reasons)s, %(distance_miles)s) "
+            "insert into brief_matches (brief_id, employer_job_id, score, reasons, distance_miles, signal, "
+            "open_since_label, location_label) values (%(brief_id)s, %(employer_job_id)s, %(score)s, %(reasons)s, "
+            "%(distance_miles)s, %(signal)s, %(open_since_label)s, %(location_label)s) "
             "on conflict (brief_id, employer_job_id) do update set score = excluded.score, "
-            "reasons = excluded.reasons, distance_miles = excluded.distance_miles returning *", row)
+            "reasons = excluded.reasons, distance_miles = excluded.distance_miles, signal = excluded.signal, "
+            "open_since_label = excluded.open_since_label, location_label = excluded.location_label returning *",
+            {"signal": None, "open_since_label": None, "location_label": None, **row})
 
     def cache_get(self, key: str, max_age_days: float | None = None) -> Any:
         r = self.one("select value, fetched_at from http_cache where key = %s", (key,))
@@ -474,7 +477,247 @@ class _AgencyMixin:
 
 
 # =============================================================================
+# Phase 4/5: CRM data (searches, activities, templates, clients, scorecard)
+# =============================================================================
+ACTIVITY_TYPES = ("email", "call", "linkedin_dm", "linkedin_connect", "note", "meeting")
+OUTREACH_TYPES = ("email", "call", "linkedin_dm", "linkedin_connect")
+
+
+class TerritoryTaken(ValueError):
+    pass
+
+
+class _CrmMixin:
+    # -- searches ------------------------------------------------------------
+    def searches_overview(self) -> list[dict]:
+        return self.q("""
+            select s.*,
+              (select row_to_json(r) from (select id, status, started_at, finished_at, listings_seen, new_listings, error
+                 from runs where search_id = s.id order by id desc limit 1) r) as last_run,
+              (select count(*) from hot_lead_searches h join hot_leads l on l.lead_key = h.lead_key
+                 where h.search_id = s.id and l.status <> 'ignored') as hot_leads,
+              (select count(*) from agency_searches a where a.search_id = s.id) as agencies,
+              (select json_build_object('client_id', c.id, 'agency', a.name) from client_territories t
+                 join clients c on c.id = t.client_id left join agencies a on a.id = c.agency_id
+                 where t.search_id = s.id and c.status <> 'ended' limit 1) as owner
+            from searches s order by s.id""")
+
+    def update_search(self, search_id: int, fields: dict) -> dict | None:
+        allowed = {k: v for k, v in fields.items() if k in ("label", "keywords", "location", "radius_miles",
+                                                              "min_salary", "active")}
+        return self._update("searches", search_id, allowed)
+
+    def search_row(self, search_id: int) -> dict | None:
+        return self.one("select * from searches where id = %s", (search_id,))
+
+    # -- hot leads -------------------------------------------------------------
+    def set_hot_lead_status(self, lead_key: str, status: str) -> dict | None:
+        return self.one("update hot_leads set status = %s where lead_key = %s returning *", (status, lead_key))
+
+    def top_hot_leads_for_search(self, search_id: int, n: int = 3) -> list[dict]:
+        return self.q("""select h.* from hot_leads h join hot_lead_searches s on s.lead_key = h.lead_key
+                         where s.search_id = %s and h.status <> 'ignored'
+                         order by h.score desc, h.posting_count_90d desc, h.last_seen_at desc limit %s""",
+                      (search_id, n))
+
+    # -- activities --------------------------------------------------------------
+    def add_activity(self, row: dict) -> dict:
+        if row["type"] not in ACTIVITY_TYPES:
+            raise ValueError(f"type must be one of {ACTIVITY_TYPES}")
+        row = {"counts_toward_daily": row["type"] in OUTREACH_TYPES, **row}
+        return self._insert("activities", row)
+
+    def activities(self, agency_id: int | None = None, limit: int = 200) -> list[dict]:
+        if agency_id:
+            return self.q("""select t.*, c.full_name as contact_name from activities t
+                             left join contacts c on c.id = t.contact_id where t.agency_id = %s
+                             order by t.happened_at desc limit %s""", (agency_id, limit))
+        return self.q("""select t.*, a.name as agency_name from activities t left join agencies a on a.id = t.agency_id
+                         order by t.happened_at desc limit %s""", (limit,))
+
+    def has_outreach_activity(self, agency_id: int) -> bool:
+        return bool(self.one("select 1 as x from activities where agency_id = %s and type = any(%s) limit 1",
+                             (agency_id, list(OUTREACH_TYPES))))
+
+    # -- templates ------------------------------------------------------------------
+    def templates(self) -> list[dict]:
+        return self.q("select * from templates order by id")
+
+    def template(self, template_id: int) -> dict | None:
+        return self.one("select * from templates where id = %s", (template_id,))
+
+    def template_by_channel(self, channel: str) -> dict | None:
+        return self.one("select * from templates where channel = %s order by id limit 1", (channel,))
+
+    def save_template(self, row: dict, template_id: int | None = None) -> dict:
+        row = {k: v for k, v in row.items() if k in ("name", "channel", "subject", "body")}
+        return self._update("templates", template_id, row) if template_id else self._insert("templates", row)
+
+    def delete_template(self, template_id: int) -> None:
+        self.q("delete from templates where id = %s", (template_id,))
+
+    # -- clients ----------------------------------------------------------------------
+    def clients(self, active_only: bool = False) -> list[dict]:
+        where = "where c.status = 'active' and c.plan in ('pilot','founding','done_for_you')" if active_only else ""
+        return self.q(f"""
+            select c.*, a.name as agency_name,
+              coalesce((select json_agg(json_build_object('search_id', s.id, 'label', s.label, 'location', s.location)
+                        order by s.id) from client_territories t join searches s on s.id = t.search_id
+                        where t.client_id = c.id), '[]') as territories,
+              (select count(*) from deliveries d where d.client_id = c.id) as leads_delivered,
+              (select count(*) from deliveries d where d.client_id = c.id and d.outcome = 'contacted') as contacted,
+              (select count(*) from deliveries d where d.client_id = c.id and d.outcome = 'meeting') as meetings,
+              (select count(*) from deliveries d where d.client_id = c.id and d.outcome = 'placement') as placements
+            from clients c left join agencies a on a.id = c.agency_id {where} order by c.id""")
+
+    def client(self, client_id: int) -> dict | None:
+        rows = [c for c in self.clients() if c["id"] == client_id]
+        return rows[0] if rows else None
+
+    def create_client(self, row: dict, search_ids: list[int]) -> dict:
+        with self.conn.transaction():
+            c = self._insert("clients", {k: v for k, v in row.items() if k in (
+                "agency_id", "plan", "monthly_price_gbp", "start_date", "end_date", "sheet_url", "delivery_email",
+                "status")})
+            self.set_territories(c["id"], search_ids)
+            if row.get("agency_id"):
+                stage = "pilot" if row["plan"] == "pilot" else "paid"
+                self.q("update agencies set stage = %s where id = %s", (stage, row["agency_id"]))
+        return self.client(c["id"])
+
+    def update_client(self, client_id: int, fields: dict) -> dict | None:
+        allowed = {k: v for k, v in fields.items() if k in ("plan", "monthly_price_gbp", "start_date", "end_date",
+                                                              "sheet_url", "delivery_email", "status")}
+        self._update("clients", client_id, allowed)
+        return self.client(client_id)
+
+    def set_territories(self, client_id: int, search_ids: list[int]) -> None:
+        taken = self.q("""select t.search_id, s.label from client_territories t join searches s on s.id = t.search_id
+                          where t.search_id = any(%s) and t.client_id <> %s""", (list(search_ids), client_id))
+        if taken:
+            raise TerritoryTaken("already owned by another client: " + ", ".join(t["label"] for t in taken))
+        self.q("delete from client_territories where client_id = %s and not (search_id = any(%s))",
+               (client_id, list(search_ids)))
+        for sid in search_ids:
+            self.q("insert into client_territories (client_id, search_id) values (%s, %s) on conflict do nothing",
+                   (client_id, sid))
+
+    def undelivered_leads(self, client_id: int, limit: int = 200) -> list[dict]:
+        return self.q("""
+            select distinct on (h.lead_key) h.*, s.id as search_id, s.label as search_label, s.location as search_location
+            from client_territories t join hot_lead_searches hs on hs.search_id = t.search_id
+            join hot_leads h on h.lead_key = hs.lead_key join searches s on s.id = t.search_id
+            where t.client_id = %s and h.status <> 'ignored'
+              and not exists (select 1 from deliveries d where d.client_id = %s and d.lead_key = h.lead_key)
+            order by h.lead_key, h.score desc limit %s""", (client_id, client_id, limit))
+
+    def mark_delivered(self, client_id: int, lead_keys: list[str]) -> list[str]:
+        rows = self.q("""insert into deliveries (client_id, lead_key) select %s, k from unnest(%s::text[]) k
+                         on conflict (client_id, lead_key) do nothing returning lead_key""", (client_id, lead_keys))
+        return [r["lead_key"] for r in rows]
+
+    def deliveries(self, client_id: int) -> list[dict]:
+        return self.q("""select d.*, h.employer_name, h.title from deliveries d join hot_leads h on h.lead_key = d.lead_key
+                         where d.client_id = %s order by d.delivered_at desc""", (client_id,))
+
+    def set_delivery_outcome(self, delivery_id: int, outcome: str) -> dict | None:
+        return self._update("deliveries", delivery_id, {"outcome": outcome})
+
+    # -- scorecard / today ------------------------------------------------------------
+    def scorecard(self, today, week_start) -> dict:
+        r = self.one("""select
+            (select count(*) from activities where counts_toward_daily and (happened_at at time zone 'Europe/London')::date = %s) as today,
+            (select count(*) from activities where counts_toward_daily and (happened_at at time zone 'Europe/London')::date = %s - 1) as yesterday,
+            (select count(*) from activities where type = 'meeting' and (happened_at at time zone 'Europe/London')::date >= %s) as meetings_week,
+            (select count(*) from clients where status = 'active' and plan = 'pilot') as active_pilots,
+            (select count(*) from clients where status = 'active' and plan <> 'pilot') as paying_clients,
+            (select coalesce(sum(monthly_price_gbp), 0) from clients where status = 'active' and plan <> 'pilot') as mrr_gbp
+            """, (today, today, week_start))
+        return r
+
+    def daily_history(self, days: int = 14) -> list[dict]:
+        return self.q("""select (happened_at at time zone 'Europe/London')::date as day,
+                                count(*) filter (where counts_toward_daily) as outreach_actions,
+                                count(*) filter (where type = 'meeting') as meetings
+                         from activities where happened_at >= now() - make_interval(days => %s)
+                         group by 1 order by 1""", (days,))
+
+    def follow_ups_due(self, today) -> list[dict]:
+        return self.q("""select a.*, (select c.full_name from contacts c where c.agency_id = a.id order by c.id limit 1)
+                                as director_name
+                         from agencies a where a.next_follow_up <= %s
+                         and a.stage not in ('lost', 'do_not_contact', 'paid') order by a.next_follow_up""", (today,))
+
+    def replies_waiting(self) -> list[dict]:
+        """Agencies at stage 'replied': they answered and are waiting on the owner."""
+        return self.q("select * from agencies where stage = 'replied' order by id")
+
+    def global_search(self, term: str, limit: int = 8) -> dict[str, list[dict]]:
+        like = f"%{term}%"
+        return {
+            "agencies": self.q("select id, name, stage from agencies where name ilike %s order by ads_count_90d desc "
+                               "limit %s", (like, limit)),
+            "contacts": self.q("""select c.id, c.full_name, c.role, c.agency_id, a.name as agency_name from contacts c
+                                  join agencies a on a.id = c.agency_id where c.full_name ilike %s or c.email ilike %s
+                                  limit %s""", (like, like, limit)),
+            "hot_leads": self.q("""select lead_key, employer_name, title, location_name, score from hot_leads
+                                   where employer_name ilike %s or title ilike %s order by score desc limit %s""",
+                                (like, like, limit)),
+            "employers": self.q("select id, name, town, status from employers where name ilike %s limit %s",
+                                (like, limit)),
+        }
+
+    # -- forget ---------------------------------------------------------------------------
+    def forget_contact(self, contact_id: int) -> bool:
+        c = self.contact(contact_id)
+        if not c:
+            return False
+        with self.conn.transaction():
+            if c.get("email"):
+                self.suppress(c["email"], "forget request")
+            self.q("update activities set contact_id = null where contact_id = %s", (contact_id,))
+            self.q("delete from contacts where id = %s", (contact_id,))
+        return True
+
+    # -- role match bits for the API --------------------------------------------------------
+    def brief(self, brief_id: int) -> dict | None:
+        return self.one("select * from candidate_briefs where id = %s", (brief_id,))
+
+    def update_brief(self, brief_id: int, fields: dict) -> dict | None:
+        allowed = {k: v for k, v in fields.items() if k in ("label", "location", "radius_miles", "sector_keywords",
+                                                              "seniority", "active", "lat", "lng", "role_family_id")}
+        return self._update("candidate_briefs", brief_id, allowed)
+
+    def matches_detail(self, brief_ids: list[int], min_score: int | None = None, status: str | None = None) -> list[dict]:
+        if not brief_ids:
+            return []
+        where, params = ["m.brief_id = any(%s)"], [list(brief_ids)]
+        if min_score is not None:
+            where.append("m.score >= %s"); params.append(min_score)
+        if status:
+            where.append("m.status = %s"); params.append(status)
+        return self.q(f"""select m.*, b.label as brief_label, j.title as their_role, j.url, j.location_text, j.source,
+                                 j.first_seen_at, j.wayback_first_seen, j.date_posted, e.name as company, e.town
+                          from brief_matches m join candidate_briefs b on b.id = m.brief_id
+                          join employer_jobs j on j.id = m.employer_job_id join employers e on e.id = j.employer_id
+                          where {' and '.join(where)} order by b.label, m.score desc""", params)
+
+    def set_match_status(self, match_ids: list[int], status: str) -> int:
+        return len(self.q("update brief_matches set status = %s where id = any(%s) returning id",
+                          (status, list(match_ids))))
+
+    def update_family(self, family_id: int, fields: dict) -> dict | None:
+        allowed = {k: v for k, v in fields.items() if k in ("name", "exact_titles", "related_titles")}
+        return self._update("role_families", family_id, allowed)
+
+    def new_matches_by_agency(self) -> list[dict]:
+        return self.q("""select a.id as agency_id, a.name, count(*) as new_matches from brief_matches m
+                         join candidate_briefs b on b.id = m.brief_id join agencies a on a.id = b.agency_id
+                         where m.status = 'new' group by a.id, a.name order by new_matches desc""")
+
+
+# =============================================================================
 # The store: every mixin above. New query groups are added as mixins.
 # =============================================================================
-class PgStore(_CoreStore, _DetectMixin, _AgencyMixin):
+class PgStore(_CoreStore, _DetectMixin, _AgencyMixin, _CrmMixin):
     pass
