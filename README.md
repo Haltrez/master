@@ -118,6 +118,12 @@ Open the CRM. The home page is all you need:
   the Apex order doing?", "pause the Leeds order", "Apex had a meeting with
   Harlow Group". It uses the CRM for you.
 - **CSV** on every order works with or without Google.
+- **Territories**: start collecting an industry + town before you sell it, so reposts build up. "Check
+  ready leads" shows how many verified leads exist right now, without sending anything (use it before a
+  sales call).
+
+How each lead is checked (repost evidence, area, Claude Haiku reading the ad, Companies House, one row
+per company): see [docs/LEAD_ENGINE.md](docs/LEAD_ENGINE.md).
 
 Everything else (agencies to sell to, outreach scorecard, Role Match, raw
 searches) is under **Advanced**.

@@ -78,7 +78,7 @@ function OrderRow({ o, onChange }: { o: any; onChange: () => void }) {
         <div className="flex-1"><Progress value={sent} max={o.leads_wanted} /></div>
         <span className="text-sm tabular-nums" data-testid="order-progress">{sent} / {o.leads_wanted}</span>
       </div>
-      {o.note && <p className="mt-1 text-xs text-slate-500">{o.note}{o.ready > 0 && o.status !== "done" ? ` ${o.ready} more reposting companies waiting for checks.` : ""}</p>}
+      {o.note && <p className="mt-1 text-xs text-slate-500">{o.note}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
         {o.sheet_url && <a href={o.sheet_url} target="_blank" rel="noreferrer" className="font-medium">Open sheet ↗</a>}
         <a href={`/api/engine/orders/${o.id}/leads.csv`}>CSV</a>

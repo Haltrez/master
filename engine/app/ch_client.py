@@ -133,7 +133,9 @@ def parse_officer_name(raw: str) -> tuple[str, str, str]:
         parts = raw.split()
         first, last = " ".join(parts[:-1]), parts[-1] if parts else ""
     # drop titles like "Mr", "Dr"
-    first_parts = [p for p in first.split() if p.lower().strip(".") not in {"mr", "mrs", "ms", "miss", "dr", "sir"}]
+    # "CHAFFEY, Nicholas John, Mr": commas between forenames and a trailing title
+    first_parts = [p.strip(",") for p in first.replace(",", " ").split()
+                   if p.lower().strip(".,") not in {"mr", "mrs", "ms", "miss", "dr", "sir", "prof", "lord", "lady"}]
     last = last.title() if last.isupper() else last
     first_name = first_parts[0].title() if first_parts and first_parts[0].isupper() else (first_parts[0] if first_parts else "")
     full = " ".join([p.title() if p.isupper() else p for p in first_parts] + [last]).strip()

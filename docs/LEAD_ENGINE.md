@@ -29,11 +29,21 @@ Ads are grouped by company + role + town. Then the engine counts **separate post
 - a later ad is a **new posting** when it opened 7+ days after the last posting started, or after
   every earlier ad had been gone for 2+ days
 
+Titles reworded at the same company and town are one role when one is the other plus extra words
+("Sales Executive" / "Door to Door Sales Executive"); words that are places never merge
+("Area Sales Manager North East" is a different vacancy from "... Cambridge").
+
 A role qualifies with **2+ separate postings**, or when Indeed itself marks it as a repost, or when
 older copies are in the web archive (Totaljobs on the Wayback Machine). Its newest ad must have
 been seen in the last 10 days, so the company is still hiring.
 
-## 4. Claude Haiku reads every candidate ad
+## 4. In the area
+
+Boards like Indeed ignore the radius, so every candidate ad's own place (its coordinates, or its town
+via postcodes.io) must be within the order's radius (+25% for town-centre approximations). This runs
+before Haiku, so out-of-area ads cost nothing.
+
+## 5. Claude Haiku reads every candidate ad
 
 Haiku (the cheapest model) gets the full ad text and the industry's in/out definition, 8 ads per call
 with strict JSON output, and answers yes/no to four questions:
@@ -45,29 +55,34 @@ with strict JSON output, and answers yes/no to four questions:
 | real_vacancy | a real job: not a talent pool, franchise, commission-only, self-employed or course ad |
 | agency_would_fill | an agency could get paid to fill it: not an apprenticeship, in-house grad scheme or mass seasonal hiring |
 
-**Four yeses or it's out.** Haiku also returns the clean role name and a short reason. Each verdict
+**Four yeses or it's out.** If any ad from a company is judged "not a direct employer" (a fundraising
+agency, an outsourced sales team), the whole company is out, so it can't slip through on another ad. Haiku also returns the clean role name and a short reason. Each verdict
 is cached per industry + ad, so an ad is read once (roughly £0.01-0.03 per 100 ads). For Reed, where
 search results only carry a snippet, the full ad is fetched first. If Claude is unreachable, those
 ads simply wait for the next run: nothing unchecked goes out.
 
-## 5. Companies House
+## 6. Companies House
 
-Only for leads that passed Haiku: an active UK company, matched by name, and not a recruitment
-business (SIC 78xxx / 74500, which also marks it as an agency everywhere).
+Only for leads that passed Haiku: an active UK company and not a recruitment business (SIC 78xxx /
+74500, which also marks it as an agency everywhere). Brand names often differ from registered names
+("ASDA" is ASDA STORES LIMITED), so when the name match isn't sure, Haiku picks the right record from
+the search results (or none).
 
-## 6. One row per company, best first
+## 7. One row per company, best first
 
 If a company passed with several roles, the row shows the best one (most postings) and lists the
 others under "Also hiring". Companies this agency already had are never sent again.
 
-## 7. Decision maker
+## 8. Decision maker
 
-Directors from Companies House (free), then a hiring/HR person or director email from Hunter, only
+A director from Companies House (free) at small and mid-sized firms (4 directors or fewer; at a big
+company a board member is no use to an agency), then a hiring/HR person or director email from Hunter, only
 for rows going out, at most 2 Hunter calls each, within the monthly cap.
 
-## 8. The row
+## 9. The row
 
-Date added, Company, Role, Also hiring, Salary (per year / day / hour), Times posted, Posted on
+Date added, Company, Role, Also hiring, Salary (per year / day / hour; yearly figures under £15k are
+left out as pro-rata or estimates), Times posted, Posted on
 (the dates of each posting), Location (postcodes shown as towns), Ad link, Previous ad (from an
 earlier posting, never a same-day copy), **Why it's a lead** (the evidence + Haiku's reason),
 Decision maker, Their role, Email (verified, Ltd/LLP/PLC only), Suggested email, Status.
