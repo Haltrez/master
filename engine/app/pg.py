@@ -300,11 +300,19 @@ class _DetectMixin:
         return self.q("""
             select l.job_id, l.source, l.employer_name, l.employer_norm, l.title, l.title_norm,
                    l.location_name, coalesce(l.location_norm, '') as location_norm, l.first_seen_at,
-                   l.last_seen_at, l.posted_date, l.expiration_date, l.url,
+                   l.last_seen_at, l.posted_date, l.expiration_date, l.url, l.source_says_repost,
                    coalesce(array_agg(ls.search_id) filter (where ls.search_id is not null), '{}') as search_ids
             from listings l left join listing_searches ls on ls.job_id = l.job_id
             where l.posted_by = 'employer' and l.last_seen_at >= %s
             group by l.job_id""", (since,))
+
+    def listings_by_source(self) -> dict[int, dict[str, int]]:
+        out: dict[int, dict[str, int]] = {}
+        for r in self.q("""select ls.search_id, l.source, count(*) as n from listings l join listing_searches ls
+                           on ls.job_id = l.job_id where l.last_seen_at >= now() - interval '14 days'
+                           group by 1, 2"""):
+            out.setdefault(r["search_id"], {})[r["source"]] = r["n"]
+        return out
 
     def latest_run_starts(self) -> dict[int, dt.datetime]:
         return {r["search_id"]: r["started"] for r in self.q(

@@ -51,6 +51,7 @@ class Listing:
     expiration_date: dt.date | None = None
     url: str | None = None
     search_ids: list[int] = field(default_factory=list)
+    source_says_repost: bool = False
 
     @property
     def key(self) -> str:
@@ -119,7 +120,10 @@ def compute_hot_leads(
         ev = archive.get(key) or {}
         prior = int(ev.get("prior_count") or 0)
         count += prior
-        repost = _reposted(ls) or prior > 0
+        flagged = any(l.source_says_repost for l in ls)
+        if flagged and count < 2:
+            count = 2      # the board itself says this ad is a repost: at least two postings
+        repost = _reposted(ls) or prior > 0 or flagged
         if reposts_only:
             if not (repost and count >= threshold):
                 continue

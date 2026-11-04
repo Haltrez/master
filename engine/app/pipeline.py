@@ -42,6 +42,19 @@ def make_theirstack(settings: Settings):
     return TheirStackClient(settings.theirstack_api_key)
 
 
+def make_extra_sources(settings: Settings) -> list:
+    from .sources import ApifyIndeedClient, CareerjetClient, JoobleClient
+    out = []
+    if settings.careerjet_api_key:
+        out.append(CareerjetClient(settings.careerjet_api_key, settings.careerjet_user_ip))
+    if settings.jooble_api_key:
+        out.append(JoobleClient(settings.jooble_api_key, max_requests=settings.jooble_max_requests_per_run))
+    if settings.apify_token:
+        out.append(ApifyIndeedClient(settings.apify_token, actor=settings.apify_indeed_actor,
+                                     max_items=settings.apify_indeed_max_items))
+    return out
+
+
 def threshold(store, settings: Settings) -> int:
     try:
         return int(store.setting("repost_threshold", settings.repost_threshold))
@@ -76,12 +89,12 @@ def rebuild_all(store, settings: Settings, reed=None) -> dict[str, Any]:
 def collect_one(store, settings: Settings, search_id: int, run_id: int | None = None) -> RunResult:
     reed, adzuna = make_reed(settings), make_adzuna(settings)
     return run_search(search_id, repo=store, reed=reed, settings=settings, adzuna=adzuna, run_id=run_id,
-                      theirstack=make_theirstack(settings),
+                      theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings),
                       after_run=lambda r: rebuild_all(store, settings, reed))
 
 
 def collect_all(store, settings: Settings, run_ids: dict[int, int] | None = None) -> list[RunResult]:
     reed, adzuna = make_reed(settings), make_adzuna(settings)
     return run_all(repo=store, reed=reed, settings=settings, adzuna=adzuna, run_ids=run_ids,
-                   theirstack=make_theirstack(settings),
+                   theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings),
                    after_run=lambda r: rebuild_all(store, settings, reed))

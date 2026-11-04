@@ -83,6 +83,13 @@ class Settings:
     adzuna_app_id: str = ""
     adzuna_app_key: str = ""
     theirstack_api_key: str = ""
+    careerjet_api_key: str = ""
+    careerjet_user_ip: str = ""
+    jooble_api_key: str = ""
+    jooble_max_requests_per_run: int = 4      # free keys: 500 requests for life
+    apify_token: str = ""
+    apify_indeed_actor: str = "valig~indeed-jobs-scraper"
+    apify_indeed_max_items: int = 300         # per keyword per run (~$0.03 per 300)
     brave_api_key: str = ""
     hunter_api_key: str = ""
     engine_api_secret: str = ""
@@ -101,7 +108,8 @@ class Settings:
     known_agency_brands: tuple[str, ...] = field(default=KNOWN_AGENCY_BRANDS)
 
     def secret_values(self) -> list[str]:
-        return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.theirstack_api_key, self.brave_api_key,
+        return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.theirstack_api_key, self.careerjet_api_key,
+                            self.jooble_api_key, self.apify_token, self.brave_api_key,
                             self.hunter_api_key, self.engine_api_secret, _db_password(self.database_url)) if s]
 
 
@@ -125,6 +133,13 @@ def get_settings() -> Settings:
         adzuna_app_id=os.environ.get("ADZUNA_APP_ID", "").strip(),
         adzuna_app_key=os.environ.get("ADZUNA_APP_KEY", "").strip(),
         theirstack_api_key=os.environ.get("THEIRSTACK_API_KEY", "").strip(),
+        careerjet_api_key=os.environ.get("CAREERJET_API_KEY", "").strip(),
+        careerjet_user_ip=os.environ.get("CAREERJET_USER_IP", "").strip(),
+        jooble_api_key=os.environ.get("JOOBLE_API_KEY", "").strip(),
+        jooble_max_requests_per_run=_int("JOOBLE_MAX_REQUESTS_PER_RUN", 4),
+        apify_token=os.environ.get("APIFY_TOKEN", "").strip(),
+        apify_indeed_actor=os.environ.get("APIFY_INDEED_ACTOR", "").strip() or "valig~indeed-jobs-scraper",
+        apify_indeed_max_items=_int("APIFY_INDEED_MAX_ITEMS", 300),
         theirstack_max_jobs_per_run=_int("THEIRSTACK_MAX_JOBS_PER_RUN", 100),
         theirstack_backfill_days=_int("THEIRSTACK_BACKFILL_DAYS", 90),
         brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip(),

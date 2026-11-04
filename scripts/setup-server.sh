@@ -74,12 +74,16 @@ ask COMPANIES_HOUSE_API_KEY "Companies House API key"
 ask ADZUNA_APP_ID "Adzuna app id"
 ask ADZUNA_APP_KEY "Adzuna app key"
 ask THEIRSTACK_API_KEY "TheirStack API key"
+ask CAREERJET_API_KEY "Careerjet API key"
+ask JOOBLE_API_KEY "Jooble UK API key"
+ask APIFY_TOKEN "Apify API token (Indeed)"
 ask BRAVE_API_KEY "Brave Search API key"
 ask HUNTER_API_KEY "Hunter.io API key"
 for kv in REPOST_THRESHOLD=3 LOOKBACK_DAYS=90 REED_MAX_CALLS_PER_RUN=300 REED_REQUESTS_PER_SECOND=1 \
           ADZUNA_MAX_CALLS_PER_RUN=40 THEIRSTACK_MAX_JOBS_PER_RUN=100 THEIRSTACK_BACKFILL_DAYS=90 ENABLE_DOCS=0; do
   [ -n "$(get "${kv%%=*}")" ] || put "${kv%%=*}" "${kv#*=}"
 done
+[ -n "$(get CAREERJET_USER_IP)" ] || put CAREERJET_USER_IP "$(curl -fsS -4 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 # Daily 06:00 UK collection from the server itself, so history starts building now.
 # Once Make.com Scenario 1 is running you can remove this line to avoid running twice.
 [ -n "$(get COMPOSE_PROFILES)" ] || put COMPOSE_PROFILES scheduler

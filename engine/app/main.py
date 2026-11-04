@@ -321,7 +321,9 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     # -- searches + runs ------------------------------------------------------------
     @app.get("/searches", dependencies=A)
     def searches():
-        return db().searches_overview()
+        s = db()
+        per = s.listings_by_source()
+        return [{**x, "sources": per.get(x["id"], {})} for x in s.searches_overview()]
 
     @app.post("/searches", dependencies=A, status_code=201)
     def create_search(body: SearchIn):
@@ -759,6 +761,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         return {"settings": s.settings(),
                 "configured": {"reed": bool(settings.reed_api_key), "adzuna": bool(settings.adzuna_app_id),
                                "theirstack": bool(settings.theirstack_api_key),
+                               "careerjet": bool(settings.careerjet_api_key), "jooble": bool(settings.jooble_api_key),
+                               "indeed (apify)": bool(settings.apify_token),
                                "companies_house": bool(settings.companies_house_api_key),
                                "brave": bool(settings.brave_api_key), "hunter": bool(settings.hunter_api_key)}}
 

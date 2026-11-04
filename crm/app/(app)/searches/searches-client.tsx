@@ -84,6 +84,12 @@ export function SearchesClient({ searches }: { searches: S[] }) {
               <div><dt className="text-xs text-slate-500">Hot leads</dt><dd className="font-semibold"><Link href={`/hot-leads?search_id=${s.id}`}>{s.hot_leads}</Link></dd></div>
               <div><dt className="text-xs text-slate-500">Agencies</dt><dd className="font-semibold"><Link href={`/agencies?search_id=${s.id}`}>{s.agencies}</Link></dd></div>
             </dl>
+            {s.sources && Object.keys(s.sources).length > 0 && (
+              <p className="mt-2 flex flex-wrap gap-1 text-xs" aria-label="Ads per source, last 14 days">
+                {Object.entries(s.sources).sort((a: any, b: any) => b[1] - a[1]).map(([k, v]) => (
+                  <Badge key={k}>{k}: {String(v)}</Badge>))}
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
               <span>Last run {ago(s.last_run_at)}{s.last_run?.status === "error" && <Badge tone="red" className="ml-1" title={s.last_run.error}>error</Badge>}</span>
               {s.owner ? <Badge tone="green">Owned by {s.owner.agency}</Badge> : <Badge tone="blue">Territory available</Badge>}
