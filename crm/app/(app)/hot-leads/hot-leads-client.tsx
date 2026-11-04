@@ -65,7 +65,9 @@ export function HotLeadsClient({ leads, searches, params }: { leads: any[]; sear
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {shown.map((h) => (
                 <tr key={h.lead_key} className={h.status === "ignored" ? "opacity-50" : ""}>
-                  <td className="p-3 font-medium">{h.employer_name}</td>
+                  <td className="p-3 font-medium">{h.employer_name}
+                    <span className="block">{h.company_verified ? <Badge tone="green" title="Active company on Companies House">verified</Badge>
+                      : <Badge tone="amber" title="Not in client sheets until Companies House confirms it's a real company">{h.company_check || "not checked"}</Badge>}</span></td>
                   <td className="p-3">{h.title} {h.long_open && <Badge tone="amber" title="One ad open 30+ days">long open</Badge>}</td>
                   <td className="p-3 text-right tabular-nums">{h.posting_count_90d}×</td>
                   <td className="p-3">{d(h.first_seen_at)}</td>

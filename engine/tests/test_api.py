@@ -67,6 +67,8 @@ def seed(store):
                    values (%s, %s, %s, %s, 'Leeds', %s, '2026-08-12', now(), true, false, %s, %s, '{1}')""",
                 (key, emp, emp.lower(), title, n, 2 * (n - 1) + 1, f"https://www.reed.co.uk/jobs/x/{i}"))
         store.q("insert into hot_lead_searches values (%s, 1)", (key,))
+        store.q("insert into lead_contacts (employer_norm, company_name, ch_company_type, company_status, verified_company) "
+                "values (%s, %s, 'ltd', 'active', true)", (emp.lower(), emp))
     a = store.one("""insert into agencies (name, name_norm, ch_company_type, ch_company_status, ch_match_confidence,
                      ch_checked_at, ads_count_90d) values ('Aire Valley Recruitment', 'aire valley recruitment', 'ltd',
                      'active', 1, now(), 5) returning *""")
@@ -180,6 +182,7 @@ def test_daily_leads_never_returns_the_same_lead_twice(api, store):
                last_seen_at, live_now, long_open, score, job_ids) values ('key9', 'New Co', 'new co', 'Payroll Officer',
                3, now(), now(), true, false, 5, '{9}')""")
     store.q("insert into hot_lead_searches values ('key9', 1)")
+    store.q("insert into lead_contacts (employer_norm, verified_company) values ('new co', true)")
     day3 = api.get(f"/clients/{c['id']}/daily-leads", headers=H, params={"mark": True}).json()
     assert [l["company"] for l in day3["leads"]] == ["New Co"]
     assert store.val("select count(*) from deliveries") == 4

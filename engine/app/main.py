@@ -291,6 +291,14 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     A = [Depends(auth)]
 
+    def strict(s: PgStore) -> bool:
+        v = s.setting("verified_companies_only", True)
+        return True if v is None else bool(v)
+
+    def only_verified(s: PgStore, leads: list[dict]) -> list[dict]:
+        ok = s.verified_employer_norms([l["employer_norm"] for l in leads])
+        return [l for l in leads if l["employer_norm"] in ok]
+
     def sender(s: PgStore) -> str:
         return str(s.setting("sender_name", "Roberts") or "Roberts")
 
@@ -363,7 +371,10 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         for r in rows:
             c = contacts.get(r["employer_norm"])
             r["contact"] = {"name": c.get("contact_name"), "role": c.get("contact_role"), "email": c.get("email"),
-                            "verified": c.get("email_verified"), "checked": True} if c else None
+                            "verified": c.get("email_verified"), "checked": bool(c.get("contacts_checked"))} if c else None
+            r["company_verified"] = bool(c and c.get("verified_company") and not c.get("is_agency"))
+            r["company_check"] = None if not c else ("verified" if r["company_verified"] else
+                                                      "agency" if c.get("is_agency") else c.get("ch_company_type") or "unverified")
         return rows
 
     @app.patch("/hot-leads/{lead_key}", dependencies=A)
@@ -597,6 +608,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         s = db()
         c = s.client(client_id) or notfound("client")
         leads = s.undelivered_leads(client_id, limit)
+        if strict(s):
+            leads = only_verified(s, leads)   # unverified ones wait (not marked) until Companies House confirms them
         if mark and leads:
             newly = set(s.mark_delivered(client_id, [l["lead_key"] for l in leads]))
             leads = [l for l in leads if l["lead_key"] in newly]   # never the same lead twice, even if called twice at once
@@ -623,8 +636,10 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         from .leads import CSV_HEADERS, LEAD_COLUMNS, lead_rows
         s = db()
         search = s.search_row(search_id) if search_id else None
-        rows = lead_rows(s, s.hot_leads(search_id=search_id, min_score=min_score, status=status, live_only=live_only),
-                         uk_today(), search)
+        leads = s.hot_leads(search_id=search_id, min_score=min_score, status=status, live_only=live_only)
+        if strict(s):
+            leads = only_verified(s, leads)
+        rows = lead_rows(s, leads, uk_today(), search)
         csv_text = to_csv([CSV_HEADERS[c] for c in LEAD_COLUMNS], [{CSV_HEADERS[k]: r[k] for k in LEAD_COLUMNS} for r in rows])
         return Response(content="\ufeff" + csv_text, media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename=hot-leads-{uk_today()}.csv"})
@@ -751,7 +766,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     def patch_settings(body: dict[str, Any]):
         s = db()
         allowed = {"repost_threshold", "daily_outreach_target", "sender_name", "make_webhooks", "reposts_only",
-                   "archive_checks_per_run", "lead_contacts_per_run"}
+                   "archive_checks_per_run", "lead_contacts_per_run", "verified_companies_only",
+                   "lead_ch_checks_per_run"}
         bad = set(body) - allowed
         if bad:
             raise HTTPException(422, f"unknown settings {sorted(bad)}")

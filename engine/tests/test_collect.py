@@ -152,3 +152,21 @@ def test_run_all_runs_active_only(sample, repo, settings):
     results = run_all(repo=repo, reed=reed_for(FakeReed(datasets(sample))), settings=settings)
     assert [r.search_id for r in results] == [1, 3]
     assert all(r.status == "ok" for r in results)
+
+
+
+@pytest.mark.parametrize("text,agency", [
+    ("Our client is a leading manufacturer based in Leeds...", True),
+    ("We are recruiting on behalf of our client, a growing firm.", True),
+    ("My client, a national retailer, seeks a Finance Manager.", True),
+    ("We are exclusively partnered with a leading housebuilder.", True),
+    ("Harlow Group is hiring a Management Accountant to join our team.", False),
+    ("Our clients are at the heart of everything we do as a law firm.", False),   # an employer talking about customers
+])
+def test_agency_wording_in_ad_text(sample, text, agency):
+    from app.collect import agency_name_pattern, classify
+    from app.config import DEFAULT_AGENCY_NAME_WORDS
+    from app.reed_client import ReedJob
+    item = {**sample["results"][0], "employerName": "Harper Lane Ltd", "jobDescription": text}
+    pb, _ = classify(ReedJob.from_api(item), "employer", {}, agency_name_pattern(DEFAULT_AGENCY_NAME_WORDS))
+    assert (pb == "agency") is agency

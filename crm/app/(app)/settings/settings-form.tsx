@@ -8,7 +8,7 @@ const HOOKS = [["new_client", "New client onboarding (Scenario 4)"], ["matches_t
 export function SettingsForm({ settings }: { settings: any }) {
   const [f, setF] = useState({ repost_threshold: settings.repost_threshold ?? 3, daily_outreach_target: settings.daily_outreach_target ?? 100,
     sender_name: settings.sender_name ?? "", make_webhooks: settings.make_webhooks ?? {},
-    reposts_only: settings.reposts_only ?? true });
+    reposts_only: settings.reposts_only ?? true, verified_companies_only: settings.verified_companies_only ?? true });
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string>();
   async function save(e: React.FormEvent) {
@@ -27,6 +27,11 @@ export function SettingsForm({ settings }: { settings: any }) {
           <input type="checkbox" className="mt-1" checked={!!f.reposts_only} onChange={(e) => setF({ ...f, reposts_only: e.target.checked })} />
           <span><b>Reposts only</b>: a hot lead must have been posted, ended and posted again (our history or the Wayback Machine).
             Off also counts ads open 30+ days and two copies live at once.</span>
+        </label>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={!!f.verified_companies_only} onChange={(e) => setF({ ...f, verified_companies_only: e.target.checked })} />
+          <span><b>Real companies only</b>: sheets and CSVs only include employers confirmed as active companies on
+            Companies House, and never recruitment businesses (SIC 78xxx). Needs the Companies House key.</span>
         </label>
         <div><Label>Sender name (email footer)</Label><Input value={f.sender_name} onChange={(e) => setF({ ...f, sender_name: e.target.value })} /></div>
         {HOOKS.map(([k, label]) => (

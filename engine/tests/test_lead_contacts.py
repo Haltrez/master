@@ -86,7 +86,8 @@ def test_lead_rows_and_csv_export(api, store):
     _listings_for_seeded_lead(store)
     store.save_lead_contact({"employer_norm": "harlow group", "company_name": "HARLOW GROUP LIMITED", "ch_company_type": "ltd",
                              "contact_name": "Amy Brown", "contact_first_name": "Amy", "contact_role": "HR Manager",
-                             "email": "amy@harlowgroup.co.uk", "email_status": "valid", "email_verified": True})
+                             "email": "amy@harlowgroup.co.uk", "email_status": "valid", "email_verified": True,
+                             "verified_company": True, "company_status": "active", "contacts_checked": True})
     r = api.get("/exports/hot-leads.csv", headers=H, params={"search_id": 1})
     assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
     rows = list(csv.DictReader(io.StringIO(r.text.lstrip("﻿"))))
@@ -119,3 +120,57 @@ def test_manual_contact_edit_and_suppression(api, store):
     assert r.status_code == 200 and r.json()["contact_name"] == "Jo Bloggs"
     store.suppress("no@harlow.co.uk")
     assert api.patch("/lead-contacts/harlow group", headers=H, json={"email": "no@harlow.co.uk"}).status_code == 409
+
+
+
+# --- strict filters: real companies only, recruitment businesses removed ---------------------
+
+def test_recruitment_sic_marks_company_as_agency_and_removes_its_leads(store):
+    from app.lead_contacts import verify_lead_company
+    store.q("""insert into hot_leads (lead_key, employer_name, employer_norm, title, posting_count_90d, first_seen_at,
+               last_seen_at, live_now, long_open, score, job_ids) values ('k1', 'Harper Lane Ltd', 'harper lane',
+               'Accountant', 3, now(), now(), true, false, 5, '{1}')""")
+    store.q("""insert into listings (job_id, posted_by, employer_name, employer_norm, title, title_norm, raw)
+               values (1, 'employer', 'Harper Lane Ltd', 'harper lane', 'Accountant', 'accountant', '{}')""")
+    ch = FakeCH([{"title": "HARPER LANE LIMITED", "company_number": "11", "company_status": "active", "company_type": "ltd"}],
+                profile={"type": "ltd", "company_status": "active", "sic_codes": ["78109"]})
+    r = verify_lead_company(store, "Harper Lane Ltd", "harper lane", ch)
+    assert r["is_agency"] and not r["verified_company"]
+    assert store.val("select count(*) from hot_leads") == 0
+    assert store.one("select posted_by from listings")["posted_by"] == "agency"
+    assert store.get_overrides() == {"harper lane": True}          # stays an agency in every future run
+
+
+def test_real_company_is_verified_and_then_gets_contacts(store):
+    from app.lead_contacts import enrich_new_lead_companies, verify_lead_company
+    ch = FakeCH(CH_LTD, profile={"type": "ltd", "company_status": "active", "sic_codes": ["70100"]}, officers=OFFICERS)
+    r = verify_lead_company(store, "Harlow Group Ltd", "harlow group", ch)
+    assert r["verified_company"] and not r["is_agency"] and r["sic_codes"] == ["70100"]
+    dissolved = FakeCH([{"title": "OLD CO LTD", "company_number": "2", "company_status": "active", "company_type": "ltd"}],
+                       profile={"type": "ltd", "company_status": "dissolved"})
+    assert not verify_lead_company(store, "Old Co Ltd", "old co", dissolved)["verified_company"]
+    assert not verify_lead_company(store, "Bob's Cafe", "bobs cafe", FakeCH([]))["verified_company"]
+
+
+def test_strict_mode_keeps_unverified_out_of_sheets_until_confirmed(api, store):
+    a, _ = seed(store)
+    store.q("update lead_contacts set verified_company = false where employer_norm = 'northgate foods'")
+    c = api.post("/clients", headers=H, json={"agency_id": a["id"], "search_ids": [1]}).json()
+    got = api.get(f"/clients/{c['id']}/daily-leads", headers=H, params={"mark": True}).json()["leads"]
+    assert {l["company"] for l in got} == {"Harlow Group", "Kirkstall Engineering"}
+    # confirmed later -> delivered then (it was never marked as delivered while unverified)
+    store.q("update lead_contacts set verified_company = true where employer_norm = 'northgate foods'")
+    got = api.get(f"/clients/{c['id']}/daily-leads", headers=H, params={"mark": True}).json()["leads"]
+    assert [l["company"] for l in got] == ["Northgate Foods"]
+    # turning strict off includes unchecked companies
+    api.patch("/settings", headers=H, json={"verified_companies_only": False})
+    csv_rows = list(csv.DictReader(io.StringIO(api.get("/exports/hot-leads.csv", headers=H).text.lstrip("\ufeff"))))
+    assert len(csv_rows) == 3
+
+
+def test_hot_leads_json_shows_company_check(api, store):
+    seed(store)
+    store.q("update lead_contacts set verified_company = false, ch_company_type = 'not_found' where employer_norm = 'harlow group'")
+    rows = {r["employer_name"]: r for r in api.get("/hot-leads", headers=H).json()}
+    assert rows["Harlow Group"]["company_check"] == "not_found" and not rows["Harlow Group"]["company_verified"]
+    assert rows["Kirkstall Engineering"]["company_verified"]

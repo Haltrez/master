@@ -734,13 +734,14 @@ class _CrmMixin:
 # =============================================================================
 LEAD_CONTACT_COLS = ("employer_norm", "company_name", "ch_company_number", "ch_company_type", "ch_match_confidence",
                      "website", "contact_name", "contact_first_name", "contact_role", "email", "email_status",
-                     "email_verified")
+                     "email_verified", "company_status", "sic_codes", "is_agency", "verified_company", "contacts_checked")
 
 
 class _LeadContactMixin:
     def save_lead_contact(self, row: dict) -> dict:
         vals = {c: row.get(c) for c in LEAD_CONTACT_COLS}
-        vals["email_verified"] = bool(vals["email_verified"])
+        for b in ("email_verified", "is_agency", "verified_company", "contacts_checked"):
+            vals[b] = bool(vals[b])
         cols = ", ".join(LEAD_CONTACT_COLS)
         upd = ", ".join(f"{c} = excluded.{c}" for c in LEAD_CONTACT_COLS if c != "employer_norm")
         return self.one(f"insert into lead_contacts ({cols}, checked_at) values ({', '.join(['%s'] * len(LEAD_CONTACT_COLS))}, now()) "
@@ -763,11 +764,35 @@ class _LeadContactMixin:
         return self._update("lead_contacts", employer_norm, allowed, key="employer_norm")
 
     def lead_companies_to_enrich(self, limit: int = 20) -> list[dict]:
-        """Hot-lead companies with no contact lookup yet, best score first."""
+        """Hot-lead companies not checked on Companies House yet, best score first."""
         return self.q("""select employer_norm, max(employer_name) as employer_name, max(score) as score
                          from hot_leads h where status <> 'ignored'
                          and not exists (select 1 from lead_contacts c where c.employer_norm = h.employer_norm)
                          group by employer_norm order by max(score) desc limit %s""", (limit,))
+
+    def lead_companies_needing_contacts(self, limit: int = 20) -> list[dict]:
+        """Verified real companies with hot leads whose decision maker we haven't looked up yet."""
+        return self.q("""select c.employer_norm, max(h.employer_name) as employer_name, max(h.score) as score
+                         from lead_contacts c join hot_leads h on h.employer_norm = c.employer_norm
+                         where c.verified_company and not c.contacts_checked and h.status <> 'ignored'
+                         group by c.employer_norm order by max(h.score) desc limit %s""", (limit,))
+
+    def mark_employer_agency(self, employer_norm: str) -> int:
+        """Companies House says recruitment business: an agency everywhere, for good."""
+        with self.conn.transaction():
+            self.q("insert into employer_overrides (employer_norm, is_agency) values (%s, true) "
+                   "on conflict (employer_norm) do update set is_agency = true", (employer_norm,))
+            self.q("update listings set posted_by = 'agency' where employer_norm = %s", (employer_norm,))
+            gone = self.q("delete from hot_leads h where employer_norm = %s and status = 'new' and not exists "
+                          "(select 1 from deliveries d where d.lead_key = h.lead_key) returning lead_key", (employer_norm,))
+            self.q("update hot_leads set status = 'ignored' where employer_norm = %s", (employer_norm,))
+        return len(gone)
+
+    def verified_employer_norms(self, norms: list[str]) -> set[str]:
+        if not norms:
+            return set()
+        return {r["employer_norm"] for r in self.q("select employer_norm from lead_contacts where verified_company "
+                                                    "and not is_agency and employer_norm = any(%s)", (list(set(norms)),))}
 
     def lead_history(self, job_id_lists: list[list[int]]) -> dict[int, dict]:
         """url, salary and first seen for every job id in the given leads."""

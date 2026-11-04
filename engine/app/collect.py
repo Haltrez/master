@@ -61,6 +61,15 @@ def is_known_agency(norm: str, known: set[str] | None) -> bool:
     return False
 
 
+# Agency wording in the ad text: "Our client is a leading...", "on behalf of our client".
+# Singular "client" only: a law firm writing "our clients are..." is still an employer.
+AGENCY_PHRASES = re.compile(
+    r"\bon behalf of (?:our|my|a|an) client\b|\b(?:our|my) client(?:'s|,| is\b| has\b| are\b| based\b| seeks\b|"
+    r" requires\b| a\b| an\b| who\b)|\bwe are recruiting for (?:a|an|our) client\b|\bclient of ours\b|"
+    r"\bwe(?:'re| are) (?:exclusively )?(?:partnered|working) with (?:a|an|our) (?:client|leading)\b",
+    re.IGNORECASE)
+
+
 def classify(
     job: Any,
     queried_as: PostedBy,
@@ -79,6 +88,10 @@ def classify(
         m = agency_pattern.search(job.employer_name)
         if m:
             return "agency", f"name contains '{m.group(1).lower()}'"
+        text = getattr(job, "job_description", None) or ""
+        p = AGENCY_PHRASES.search(text)
+        if p:
+            return "agency", f"ad says '{p.group(0).strip()}'"
     return queried_as, None
 
 
@@ -145,12 +158,13 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
         if reed is None and adzuna is None and theirstack is None:
             raise ValueError("no job source configured (set REED_API_KEY and/or ADZUNA_APP_ID/ADZUNA_APP_KEY)")
         overrides = repo.get_overrides()
+        reed_known = repo.known_agency_norms() if hasattr(repo, "known_agency_norms") else None
         if reed is not None:
             for keyword in search.keywords:
                 for queried_as in ("employer", "agency"):
                     for page in reed.iter_search_pages(keyword, search.location, search.radius_miles,
                                                        search.min_salary, queried_as, budget=budget):  # type: ignore[arg-type]
-                        store_page(page, queried_as, "reed", None)  # type: ignore[arg-type]
+                        store_page(page, queried_as, "reed", reed_known)  # type: ignore[arg-type]
         if adzuna is not None:
             known = set(settings.known_agency_brands)
             if hasattr(repo, "known_agency_norms"):
