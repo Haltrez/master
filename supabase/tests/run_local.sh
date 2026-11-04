@@ -20,4 +20,5 @@ PSQL=("${RUN[@]}" "$PG_BIN/psql" -h "$WORK" -U postgres -d postgres -v ON_ERROR_
 "${PSQL[@]}" -f "$HERE/00_supabase_stub.sql"
 for f in "$ROOT"/supabase/migrations/*.sql; do "${PSQL[@]}" -f "$f"; done
 "${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
-"${PSQL[@]}" -t -f "$HERE/10_collect_test.sql"
+"${PSQL[@]}" -f "$ROOT/supabase/seed_role_match.sql"
+for t in "$HERE"/[1-9]*_test.sql; do "${PSQL[@]}" -t -f "$t"; done

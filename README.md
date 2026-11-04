@@ -6,6 +6,7 @@ SmartEmploy's internal lead engine and CRM. The full spec is in
 | Phase | What | Status |
 |---|---|---|
 | 1 | Reed API collector | **built, waiting for a real-key check** |
+| 2.5 | Role Match MVP (CLI) | **built, ran live against the 3 seed employers** |
 | 2 | Repost detection, normalisation, scoring | not started |
 | 3 | Prospect agencies + Companies House | not started |
 | 4 | FastAPI endpoints | not started |
@@ -148,9 +149,102 @@ the upsert SQL, RLS and territory exclusivity. It is skipped automatically if
 Postgres server binaries aren't installed. You can run it on its own with
 `supabase/tests/run_local.sh`.
 
+## Phase 2.5: Role Match (CLI)
+
+Role Match finds **direct employers currently hiring the roles an agency's
+candidates do**, and ranks them by how stuck the employers look. A *candidate
+brief* is a role profile only: role, location, radius, sector keywords and
+seniority. It never holds names, CVs, contact details or salaries. The brief
+file rejects keys like `name`, `email` or `salary`.
+
+### Run it
+
+```bash
+cd engine
+source .venv/bin/activate && pip install -r requirements.txt    # adds PyYAML
+python cli.py brief import ../briefs.example.yaml                # the six MCM briefs
+python cli.py employers check --all                              # careers pages + ATS boards, politely
+python cli.py match --agency "MCM Recruitment Solutions" --out matches.csv
+```
+
+Other commands:
+
+```bash
+python cli.py brief add --agency "MCM Recruitment Solutions" --role "Electrical Estimator" --location Warrington --radius 30
+python cli.py brief list --agency "MCM Recruitment Solutions"
+python cli.py employers add --name "Acme M&E Ltd" --careers-url https://acme.example/careers --town Bolton
+python cli.py employers list [--status research]
+python cli.py employers check --id 3 [--force]        # --force skips the weekly schedule, never the once-a-day limit
+python cli.py employers import-ch --location Manchester  # Companies House SIC search -> research queue
+python cli.py match --agency "..." --check --no-reed      # check due employers first; skip Reed
+```
+
+**Where data goes:** if `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set,
+Role Match uses Supabase. In that case run `supabase/migrations/003_role_match.sql`
+and then `supabase/seed_role_match.sql` in the SQL editor first. Otherwise it
+uses a local file, `engine/.role_match_local.json` (git-ignored), which comes
+seeded with the role families and the three seed employers. You can force one
+or the other with `python cli.py --store local|supabase ...`.
+
+### Sources, in order of trust
+
+1. **Employer careers pages.** The extractor reads JSON-LD `JobPosting` data
+   when a page has it. Otherwise it finds job-title-shaped headings and labels
+   and pairs each with its own link (Apply button, job page, or .docx advert).
+   Bullet lists of "roles we're always looking for" with no links are ignored.
+   So are named people, such as staff profiles.
+2. **ATS job boards** with documented, public, keyless APIs:
+   - Greenhouse (`boards-api.greenhouse.io/v1/boards/{token}/jobs`)
+   - Lever (`api.lever.co/v0/postings/{site}?mode=json`)
+   - Ashby (`api.ashbyhq.com/posting-api/job-board/{name}`)
+
+   Breathe HR's API needs the company's own key, so Breathe vacancies are read
+   from the careers page and Breathe's public `/v/` pages.
+3. **Reed API, direct employers only.** This needs `REED_API_KEY`. Reed is
+   searched for each exact title in the role family, at 1.5× the brief's
+   radius. Direct employers become matches and join the directory as
+   `research` rows. Agency ads, including employer-query results whose names
+   look like agencies, are never matches. They're counted as **market demand**.
+4. **Wayback Machine CDX.** This gives the earliest capture of each matched
+   job URL, cached for 30 days. With no capture, the report says `unknown`.
+   It never guesses.
+
+### Polite fetching (enforced in `app/polite.py`, tested in `tests/test_polite.py`)
+
+- robots.txt is checked with `urllib.robotparser` before every domain. Rules
+  are ordered so the longest match wins, per RFC 9309. A disallowed careers
+  page marks the employer `blocked_by_robots`.
+- User agent `SmartEmployBot/1.0 (+https://smartemploy.io/bot)`.
+- At most 1 request per 5 seconds per domain, robots.txt requests included.
+- At most 3 pages per employer per check: the careers page plus up to 2 job
+  pages.
+- Each employer is checked at most once a day, and weekly by default.
+- Job boards (Indeed, Totaljobs, CV-Library, LinkedIn, Reed web pages, …) are
+  refused outright.
+- Pages that only work with JavaScript are marked `needs_manual`. There is no
+  headless browser.
+- Per job, only the title, location text, URL, first/last seen, a hash of the
+  page text, the employer's own posted date and which sector keywords appear
+  are stored. Page text, names and emails are never stored.
+
+### matches.csv
+
+The columns are `candidate_role, company, their_open_role, location,
+distance_miles, open_since, signal, link, source, score`. Rows are sorted by
+candidate role, then score. A market-demand row per role follows the matches.
+When an ad doesn't state a location, the company's base town is used and
+labelled `(company base)`.
+
+Scoring follows the spec table: exact +4, related +2, within radius +2
+(within 1.5× +1, further out is excluded), open 30+ days +2, reposted on Reed
++2, 2+ roles in the family at one employer +1, sector keyword +1, probably
+filled −3.
+
 ## Rules this codebase follows
 
-- Official APIs only. No scraping.
+- Official APIs only, with one exception added in Phase 2.5: employers' own
+  careers pages and ATS boards, fetched under the polite rules above. Job
+  boards are never scraped.
 - No candidate or job-seeker data.
 - Secrets only in env vars. Keys are never logged: the Reed key travels in the
   Basic-auth header, httpx's own request logging is silenced, and a log filter

@@ -456,6 +456,329 @@ run.
 - [ ] python cli.py hot-leads --search-id 1 --top 20 prints a readable
   table
 
+## Phase 2.5: Role Match (paste this into the existing Claude Code chat)
+
+Copy everything from here to the end of the next section into Claude
+Code as one message.
+
+> **Update to BUILD_PROMPT.md. Read it fully before changing anything.**
+>
+> Add this as Phase 2.5, between Phase 2 and Phase 3. Also append it to
+> BUILD_PROMPT.md so the file stays the single source of truth. Priority
+> order changes: **finish Phase 1, then build the Role Match MVP below
+> before anything else.** A prospect agency needs a matched list by
+> Friday 6 November 2026. The CRM parts of Role Match get built during
+> Phase 5. Work as before: run tests, show me how to run it, list
+> assumptions, wait for my OK.
+
+**What Role Match does:** an agency has candidates it is "sitting on"
+(e.g. an Electrical Estimator in Warrington). Role Match finds **direct
+employers currently hiring that role near that location**, and ranks
+them by how stuck they look. The agency then sends the candidate's CV to
+the employer. Recruiters call this marketing an MPC (most placeable
+candidate). This is the most valuable thing SmartEmploy can hand an
+agency, because it turns idle candidates into fees.
+
+**Hard rule: no candidate personal data.** A "candidate brief" is a role
+profile only: role title, location, radius, sector keywords, seniority.
+Never names, CVs, contact details or salaries of individuals.
+
+**Lesson from manual research (design around it):** in North West M&E,
+most job-board ads are posted by recruitment agencies with the employer
+hidden. The best leads came from **employers' own careers pages**. So
+Role Match uses four sources, in this order of trust:
+
+| \#  | Source                          | How                                                                                                                              | Notes                                                                                                                                        |
+|-----|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| 1   | Employer careers pages          | Fetch each employer's own careers URL from the employer directory, extract job titles and locations                              | Main source. Polite fetching rules below                                                                                                     |
+| 2   | Known ATS job boards            | If a careers URL is on a known applicant-tracking system, use that system's documented public job-board endpoint instead of HTML | Only documented public endpoints. Read each provider's docs first and tell me which ones you used. If unsure, fall back to fetching the page |
+| 3   | Reed API, direct employers only | Existing reed_client.search(..., posted_by='employer') for each role synonym and location                                        | Also adds newly discovered employers to the directory                                                                                        |
+| 4   | Wayback Machine CDX API         | For each matched job URL and careers page URL: earliest capture date                                                             | Gives "open since". Coverage is patchy: show "unknown" rather than guessing                                                                  |
+
+Agency ads from Reed are **not** matches, but count them per role and
+region as a "market demand" figure shown in the report ("9 agency ads
+for this role in the North West right now").
+
+**Polite fetching rules for careers pages (non-negotiable):**
+
+- Only employers' own careers pages and ATS job boards. Never job boards
+  like Indeed, Totaljobs, CV-Library or LinkedIn
+
+- Check robots.txt with urllib.robotparser before every domain. If
+  disallowed, skip and mark the employer blocked_by_robots
+
+- User agent: SmartEmployBot/1.0 (+https://smartemploy.io/bot). Max 1
+  request per 5 seconds per domain. Max 3 pages per employer per check
+  (careers page plus up to 2 job detail pages)
+
+- Check each employer at most once a day, default weekly
+
+- Store only: job title, location text, job URL, first seen, last seen,
+  and a hash of the page text. No personal names or emails from the page
+
+- Handle JavaScript-only careers pages by marking them needs_manual
+  rather than adding a headless browser. Ask me before adding Playwright
+
+**Wayback CDX:** GET
+https://web.archive.org/cdx/search/cdx?url={url}&output=json&fl=timestamp,statuscode&filter=statuscode:200&limit=1
+returns the earliest successful capture. Throttle to 1 request per
+second, cache results for 30 days, and store wayback_first_seen (date or
+null). If the job URL has no captures, try the careers page URL and
+label the result "careers page captured since {date}" rather than
+claiming the job was open that long.
+
+**Location matching:** geocode places and postcodes with the free
+postcodes.io API (/postcodes/{postcode} and /places?q={name}), cache
+forever, and compute distance in miles. Job locations that can't be
+geocoded get distance = null and are kept but ranked lower.
+
+**Role families and synonyms** (new table, editable in the CRM, seeded
+with these M&E families):
+
+| Brief role                          | Exact titles (match)                                                                                                                    | Related titles (lower score)                                                                                    |
+|-------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| Electrical Estimator                | electrical estimator, senior electrical estimator, m&e estimator, estimator (electrical)                                                | mechanical estimator, quantity surveyor (m&e), pre-construction engineer (electrical)                           |
+| Mechanical Pre-Construction Manager | mechanical pre-construction manager, pre-construction manager (mechanical), mechanical precon manager, mechanical pre-contracts manager | pre-construction manager, mep preconstruction manager, mechanical design manager, mechanical estimating manager |
+| Electrical Pre-Construction Manager | electrical pre-construction manager, pre-construction manager (electrical), electrical precon manager, electrical pre-contracts manager | pre-construction manager, mep preconstruction manager, electrical design manager, electrical estimating manager |
+| Mechanical Design Engineer          | mechanical design engineer, mechanical building services engineer, mechanical engineer (building services), hvac design engineer        | senior mechanical engineer (building services), mechanical design manager, building services design engineer    |
+| Electrical Site Manager             | electrical site manager, m&e site manager, electrical site supervisor                                                                   | electrical supervisor, m&e supervisor, electrical contracts manager                                             |
+| Electrical Project Manager          | electrical project manager, m&e project manager                                                                                         | electrical contracts manager, trainee electrical project manager, electrical project engineer                   |
+
+Match on normalised titles from Phase 2's title_norm. Seniority words
+still matter: a "Senior" ad is still a match for a non-senior brief, but
+flag it.
+
+**Scoring** (higher = better, shown with a plain-English reason):
+
+| Signal                                                                                              | Points                                  |
+|-----------------------------------------------------------------------------------------------------|-----------------------------------------|
+| Exact title match                                                                                   | +4                                      |
+| Related title                                                                                       | +2                                      |
+| Within the brief's radius                                                                           | +2 (outside radius but within 1.5×: +1) |
+| Open 30+ days (our first_seen or Wayback)                                                           | +2                                      |
+| Reposted (Phase 2 hot lead for the same key)                                                        | +2                                      |
+| Employer has 2+ open roles in the same family                                                       | +1                                      |
+| Sector keywords found in the ad (M&E, building services, HVAC, electrical installation, commercial) | +1                                      |
+| Ad older than 60 days with no last_seen in 14 days (probably filled)                                | −3                                      |
+
+**Employer directory:** a new employers table holds companies we
+monitor. It fills from three places:
+
+1.  Manual add in the CRM (name + website + careers URL)
+
+2.  Every direct employer seen in Reed results, with careers URL left
+    blank until found
+
+3.  Companies House advanced company search filtered by SIC codes and
+    location, as a "to research" queue. Seed SIC codes: 43210 electrical
+    installation, 43220 plumbing, heat and air-conditioning
+    installation, 43290 other construction installation, 71129 other
+    engineering activities. Confirm the endpoint and parameters against
+    the Companies House API docs before building it. Companies House has
+    no websites, so these employers sit in a research queue until I add
+    a URL
+
+Seed the directory with three verified North West employers so the MVP
+works on day one:
+
+| Employer                               | Town                 | Careers URL                        |
+|----------------------------------------|----------------------|------------------------------------|
+| DL M&E Building Services Ltd           | Westhoughton, Bolton | https://www.dl-bsl.co.uk/job-board |
+| Central Electrical & Mechanical NW Ltd | Manchester           | https://celectrical.com/careers/   |
+| B-engineering (NW) Ltd                 | Warrington           | https://b-enggroup.co.uk/jobs/     |
+
+**Schema additions** (supabase/migrations/00X_role_match.sql):
+
+create table role_families (  
+id bigserial primary key,  
+name text not null unique, -- 'Electrical Estimator'  
+exact_titles text\[\] not null,  
+related_titles text\[\] not null default '{}'  
+);  
+  
+create table employers (  
+id bigserial primary key,  
+name text not null,  
+name_norm text not null unique,  
+website text,  
+careers_url text,  
+ats_type text, -- e.g. 'html', 'breathehr', or a known ATS  
+town text,  
+lat numeric, lng numeric,  
+ch_company_number text,  
+sic_codes text\[\],  
+source text not null, -- manual \| reed \| companies_house  
+status text not null default 'active', -- active \| research \|
+needs_manual \| blocked_by_robots \| ignore  
+last_checked_at timestamptz,  
+check_every_days int not null default 7,  
+created_at timestamptz not null default now()  
+);  
+  
+create table employer_jobs (  
+id bigserial primary key,  
+employer_id bigint references employers(id) on delete cascade,  
+source text not null, -- careers_page \| ats \| reed  
+title text not null,  
+title_norm text not null,  
+location_text text,  
+lat numeric, lng numeric,  
+url text,  
+first_seen_at timestamptz not null default now(),  
+last_seen_at timestamptz not null default now(),  
+wayback_first_seen date,  
+page_hash text,  
+unique (employer_id, url)  
+);  
+  
+create table candidate_briefs (  
+id bigserial primary key,  
+client_id bigint references clients(id) on delete cascade, -- or a
+prospect agency  
+agency_id bigint references agencies(id) on delete cascade,  
+role_family_id bigint references role_families(id),  
+label text not null, -- 'Electrical Estimator - Warrington'  
+location text not null,  
+lat numeric, lng numeric,  
+radius_miles int not null default 30,  
+sector_keywords text\[\] not null default '{}',  
+seniority text,  
+active boolean not null default true,  
+created_at timestamptz not null default now()  
+);  
+  
+create table brief_matches (  
+id bigserial primary key,  
+brief_id bigint references candidate_briefs(id) on delete cascade,  
+employer_job_id bigint references employer_jobs(id) on delete cascade,  
+score int not null,  
+reasons text\[\] not null,  
+distance_miles numeric,  
+status text not null default 'new', -- new \| sent \| contacted \|
+interview \| placed \| not_relevant  
+first_matched_at timestamptz not null default now(),  
+unique (brief_id, employer_job_id)  
+);
+
+Row Level Security on all of them, same as the rest. candidate_briefs
+works for a prospect agency (pre-pilot, agency_id) as well as a client.
+
+**MVP for Friday (CLI only, no UI):**
+
+python cli.py brief add --agency "MCM Recruitment Solutions" --role
+"Electrical Estimator" --location Warrington --radius 30  
+python cli.py employers check --all \# fetch careers pages + ATS
+boards  
+python cli.py match --agency "MCM Recruitment Solutions" --out
+matches.csv
+
+Also support python cli.py brief import briefs.yaml so I can load all
+six at once:
+
+agency: MCM Recruitment Solutions  
+sector_keywords: \[m&e, building services, commercial\]  
+briefs:  
+- {role: Electrical Estimator, location: Warrington, radius: 30}  
+- {role: Mechanical Pre-Construction Manager, location: Manchester,
+radius: 35}  
+- {role: Electrical Pre-Construction Manager, location: Warrington,
+radius: 40}  
+- {role: Mechanical Design Engineer, location: Preston, radius: 30}  
+- {role: Electrical Site Manager, location: Manchester, radius: 25}  
+- {role: Electrical Project Manager, location: Manchester, radius: 25}
+
+**matches.csv columns** (this is what the client sees, so keep wording
+plain): candidate_role, company, their_open_role, location,
+distance_miles, open_since, signal, link, source, score. Sort by
+candidate role, then score. signal is a short human sentence, e.g. "Open
+since Sept, 2 PM roles open at once". Below the matches, a summary row
+per role: "Market demand: 9 agency ads for this role in the North West".
+
+**Phase 2.5 acceptance checks:**
+
+- [ ] The three seed employers are checked politely and their current
+  roles stored
+
+- [ ] Loading the six-brief YAML and running match produces a CSV with
+  correct matches from the seed employers (e.g. DL M&E → Electrical
+  Project Manager; Central Electrical & Mechanical → Electrical
+  Estimator)
+
+- [ ] No agency ads appear as matches; agency counts appear as market
+  demand
+
+- [ ] robots.txt, rate limits and the 3-pages-per-employer cap are
+  enforced and tested
+
+- [ ] Wayback dates show where captures exist and "unknown" where they
+  don't
+
+- [ ] No candidate personal data anywhere in the schema, logs or exports
+
+## Role Match in the CRM (build during Phase 5)
+
+Add these to the CRM when Phase 5 is built. They make Role Match
+something the owner runs in two clicks for any agency, prospect or
+client.
+
+**New engine endpoints** (same X-API-Key rules as Phase 4):
+
+| Method | Path                                                | Does                                                                  |
+|--------|-----------------------------------------------------|-----------------------------------------------------------------------|
+| POST   | /briefs                                             | Create a brief for an agency or client                                |
+| POST   | /agencies/{id}/match                                | Check due employers, run matching for all active briefs, 202 + run_id |
+| GET    | /agencies/{id}/matches?brief_id=&min_score=&status= | Matches with reasons                                                  |
+| GET    | /exports/matches.csv?agency_id=                     | The client-facing CSV from Phase 2.5                                  |
+| POST   | /employers                                          | Add an employer manually                                              |
+| POST   | /employers/{id}/check                               | Check one employer's careers page now                                 |
+| POST   | /employers/import-companies-house?sic=&location=    | Fill the research queue                                               |
+
+**CRM pages:**
+
+| Where                                                        | What's on it                                                                                                                                                                                                                                                                                                                                                                                |
+|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| /agencies/\[id\] and /clients/\[id\], new **Candidates** tab | List of candidate briefs (role, location, radius, sector, active). "Add brief" form with role picked from role families. **"Find matches"** button with live run status. Results grouped by brief: company, their role, distance, open since, signal, score, link, status dropdown (new, sent, contacted, interview, placed, not relevant). Buttons: "Download CSV", "Send to Google Sheet" |
+| /employers                                                   | Employer directory table: name, town, careers URL, status badge (active, research, needs manual, blocked by robots), open roles count, last checked. Filters by status and town. Inline "add careers URL" for research-queue rows, so building the directory is fast. "Check now" per row                                                                                                   |
+| /settings/role-families                                      | Edit exact and related titles per family, with a live preview of which stored jobs each family would match                                                                                                                                                                                                                                                                                  |
+| / Today                                                      | New card: "New matches for your agencies" with count per agency, linking to their Candidates tab                                                                                                                                                                                                                                                                                            |
+
+**Make.com addition, Scenario 5: Candidate matches to Google Sheet** (on
+demand, triggered by the CRM button through a webhook):
+
+1.  Custom webhook receives agency_id and sheet_url
+
+2.  HTTP: GET /agencies/{id}/matches?status=new&min_score=4
+
+3.  Google Sheets: add rows to a **"Candidate matches"** tab with
+    columns Candidate role · Company · Their open role · Location ·
+    Distance (miles) · Open since · Signal · Link · Status (client
+    dropdown)
+
+4.  HTTP: mark those matches as sent
+
+**Sales use (why this matters):** Role Match is also an outreach hook.
+The DM becomes: "Send me the roles of 3 candidates you're sitting on and
+I'll find direct employers hiring them, free." Add a template for it in
+templates (channel linkedin):
+
+Hey {first_name}, quick one. Got any candidates you're sitting on right
+now? Send me the roles and locations (no names needed) and I'll find
+direct employers hiring those exact roles nearby. Free, no strings.
+
+**Acceptance checks for the CRM part:**
+
+- [ ] From an agency page, add six briefs, click "Find matches", and see
+  grouped results within a few minutes
+
+- [ ] Research-queue employers can get a careers URL added inline and
+  checked immediately
+
+- [ ] "Send to Google Sheet" fills the client's Candidate matches tab
+  with no duplicates on a second send
+
+- [ ] Match status changes are saved and visible on the Today card
+  counts
+
 ## Phase 3: prospect agencies and Companies House enrichment
 
 Goal: turn agency listings into a clean prospect list per niche, then

@@ -6,12 +6,20 @@
     python cli.py run --search-id 1
     python cli.py run-all
     python cli.py reed-sample --keywords "management accountant" --location Leeds
+
+Role Match (Phase 2.5):
+    python cli.py brief add --agency "MCM Recruitment Solutions" --role "Electrical Estimator" \
+        --location Warrington --radius 30
+    python cli.py brief import briefs.yaml
+    python cli.py employers check --all
+    python cli.py match --agency "MCM Recruitment Solutions" --out matches.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +29,7 @@ from app.db import SupabaseRepo
 from app.reed_client import ReedClient
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "reed_search_sample.json"
+LOCAL_STORE = Path(__file__).parent / ".role_match_local.json"
 
 
 def _reed(settings) -> ReedClient:
@@ -94,8 +103,153 @@ def cmd_reed_sample(args, settings) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Role Match
+# ---------------------------------------------------------------------------
+
+def _role_services(args, settings, *, need_fetcher=False, need_wayback=False, need_reed=False):
+    from app.geo import Geocoder
+    from app.polite import PoliteFetcher
+    from app.role_match import Services
+    from app.role_repo import LocalRoleRepo, SupabaseRoleRepo
+    from app.wayback import Wayback
+
+    store = args.store
+    if store == "auto":
+        store = "supabase" if (settings.supabase_url and settings.supabase_service_role_key) else "local"
+    if store == "supabase":
+        repo = SupabaseRoleRepo(settings.supabase_url, settings.supabase_service_role_key)
+    else:
+        repo = LocalRoleRepo(LOCAL_STORE)
+        print(f"(using local store {LOCAL_STORE.name}; set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY to use Supabase)",
+              file=sys.stderr)
+    reed = None
+    if need_reed and settings.reed_api_key:
+        reed = _reed(settings)
+    elif need_reed:
+        print("(REED_API_KEY not set: skipping Reed discovery and market demand)", file=sys.stderr)
+    return Services(repo=repo, settings=settings, geocoder=Geocoder(repo),
+                    fetcher=PoliteFetcher() if need_fetcher else None,
+                    wayback=Wayback(repo) if need_wayback else None, reed=reed)
+
+
+def cmd_brief_add(args, settings) -> int:
+    svc = _role_services(args, settings)
+    kws = [k.strip() for k in (args.sector or "").split(",") if k.strip()]
+    from app.role_match import add_brief
+
+    b = add_brief(svc, args.agency, args.role, args.location, args.radius, kws, args.seniority)
+    svc.repo.save()
+    loc = "" if b.get("lat") is not None else " (location not geocoded; distances will be unknown)"
+    print(f"Brief {b['id']}: {b['label']} within {b['radius_miles']} miles{loc}")
+    return 0
+
+
+def cmd_brief_import(args, settings) -> int:
+    from app.role_match import import_briefs
+
+    svc = _role_services(args, settings)
+    briefs = import_briefs(svc, Path(args.file))
+    svc.repo.save()
+    for b in briefs:
+        loc = "" if b.get("lat") is not None else "  [location not geocoded]"
+        print(f"Brief {b['id']}: {b['label']} within {b['radius_miles']} miles{loc}")
+    print(f"{len(briefs)} briefs loaded")
+    return 0
+
+
+def cmd_brief_list(args, settings) -> int:
+    svc = _role_services(args, settings)
+    ag = svc.repo.agency_by_name(args.agency)
+    if not ag:
+        print(f"No agency called '{args.agency}'")
+        return 1
+    for b in svc.repo.briefs(ag["id"]):
+        print(f"{b['id']:>4}  {b['label']:<50} {b['radius_miles']:>3} mi  {'active' if b.get('active', True) else 'off'}")
+    return 0
+
+
+def cmd_employers_add(args, settings) -> int:
+    svc = _role_services(args, settings)
+    e = svc.repo.add_employer({"name": args.name, "careers_url": args.careers_url, "website": args.website,
+                               "town": args.town, "source": "manual", "status": "active" if args.careers_url else "research"})
+    svc.repo.save()
+    print(f"Employer {e['id']}: {e['name']} | {e.get('careers_url') or 'no careers URL (research queue)'}")
+    return 0
+
+
+def cmd_employers_list(args, settings) -> int:
+    svc = _role_services(args, settings)
+    jobs = svc.repo.jobs()
+    for e in svc.repo.employers():
+        if args.status and e.get("status") != args.status:
+            continue
+        n = sum(1 for j in jobs if j["employer_id"] == e["id"])
+        print(f"{e['id']:>4}  {e['name'][:40]:<40} {(e.get('town') or '')[:22]:<22} {e.get('status'):<17} "
+              f"{n:>3} roles  checked {str(e.get('last_checked_at') or 'never')[:16]}")
+    return 0
+
+
+def cmd_employers_check(args, settings) -> int:
+    from app.role_match import check_employers
+
+    if not args.all and not args.id:
+        print("error: pass --all or --id N", file=sys.stderr)
+        return 2
+    svc = _role_services(args, settings, need_fetcher=True)
+    results = check_employers(svc, None if args.all else args.id, force=args.force)
+    svc.repo.save()
+    for r in results:
+        print(f"{r.employer_id:>4}  {r.name[:40]:<40} {r.outcome:<17} {r.jobs:>3} roles  {r.pages} pages  {r.note}")
+    if not results:
+        print("No employers with a careers URL to check.")
+    return 0 if all(r.outcome != "error" for r in results) else 1
+
+
+def cmd_employers_import_ch(args, settings) -> int:
+    from app.ch_client import CompaniesHouseClient, employer_rows_from_search
+    from app.role_seed import SEED_SIC_CODES
+
+    svc = _role_services(args, settings)
+    ch = CompaniesHouseClient(os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip())
+    sics = [s.strip() for s in (args.sic or ",".join(SEED_SIC_CODES)).split(",") if s.strip()]
+    rows = employer_rows_from_search(ch.advanced_search(sics, args.location, args.size))
+    for r in rows:
+        svc.repo.add_employer(r)
+    svc.repo.save()
+    print(f"{len(rows)} companies added to the research queue (SIC {', '.join(sics)}"
+          + (f", {args.location}" if args.location else "") + ")")
+    return 0
+
+
+def cmd_match(args, settings) -> int:
+    from app.role_match import check_employers, run_match, signal, write_csv
+
+    svc = _role_services(args, settings, need_fetcher=args.check, need_wayback=True, need_reed=not args.no_reed)
+    if args.check:
+        for r in check_employers(svc):
+            print(f"checked {r.name}: {r.outcome}, {r.jobs} roles {r.note}", file=sys.stderr)
+    report = run_match(svc, args.agency, use_reed=not args.no_reed)
+    svc.repo.save()
+    n = write_csv(report, Path(args.out))
+    print(f"{n} matches for {report.agency['name']} written to {args.out}")
+    current = None
+    for m in report.rows:
+        if m.brief["label"] != current:
+            current = m.brief["label"]
+            print(f"\n{current}")
+        dist = f"{m.distance:.0f} mi" if m.distance is not None else "? mi"
+        print(f"  {m.result.points:>3}  {m.employer['name'][:34]:<34} {m.job['title'][:40]:<40} {dist:>6}  {signal(m)}")
+    missing = [b["label"] for b in report.briefs if not any(m.brief["id"] == b["id"] for m in report.rows)]
+    for label in missing:
+        print(f"\n{label}\n  (no matches yet)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cli.py", description="Repost Radar engine")
+    p.add_argument("--store", choices=["auto", "local", "supabase"], default="auto",
+                   help="Role Match storage (auto = Supabase if configured, else a local JSON file)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="run one saved search")
@@ -120,6 +274,52 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--posted-by", choices=["employer", "agency"], default="employer")
     s.add_argument("--out", default=str(FIXTURE))
     s.set_defaults(fn=cmd_reed_sample)
+
+    b = sub.add_parser("brief", help="candidate briefs (role profiles only, no personal data)")
+    bsub = b.add_subparsers(dest="brief_cmd", required=True)
+    ba = bsub.add_parser("add")
+    ba.add_argument("--agency", required=True)
+    ba.add_argument("--role", required=True, help="a role family name, e.g. 'Electrical Estimator'")
+    ba.add_argument("--location", required=True)
+    ba.add_argument("--radius", type=int, default=30)
+    ba.add_argument("--sector", help="comma-separated sector keywords, e.g. 'm&e,building services'")
+    ba.add_argument("--seniority")
+    ba.set_defaults(fn=cmd_brief_add)
+    bi = bsub.add_parser("import")
+    bi.add_argument("file")
+    bi.set_defaults(fn=cmd_brief_import)
+    bl = bsub.add_parser("list")
+    bl.add_argument("--agency", required=True)
+    bl.set_defaults(fn=cmd_brief_list)
+
+    e = sub.add_parser("employers", help="employer directory and careers-page checks")
+    esub = e.add_subparsers(dest="emp_cmd", required=True)
+    ea = esub.add_parser("add")
+    ea.add_argument("--name", required=True)
+    ea.add_argument("--careers-url")
+    ea.add_argument("--website")
+    ea.add_argument("--town")
+    ea.set_defaults(fn=cmd_employers_add)
+    el = esub.add_parser("list")
+    el.add_argument("--status")
+    el.set_defaults(fn=cmd_employers_list)
+    ec = esub.add_parser("check", help="fetch careers pages + ATS boards politely")
+    ec.add_argument("--all", action="store_true", help="every employer with a careers URL that is due")
+    ec.add_argument("--id", type=int, action="append", help="one employer (repeatable)")
+    ec.add_argument("--force", action="store_true", help="ignore the weekly schedule (never more than once a day)")
+    ec.set_defaults(fn=cmd_employers_check)
+    ei = esub.add_parser("import-ch", help="Companies House SIC search into the research queue")
+    ei.add_argument("--sic", help="comma-separated SIC codes (default: the four seed codes)")
+    ei.add_argument("--location")
+    ei.add_argument("--size", type=int, default=100)
+    ei.set_defaults(fn=cmd_employers_import_ch)
+
+    m = sub.add_parser("match", help="match an agency's briefs to direct employers")
+    m.add_argument("--agency", required=True)
+    m.add_argument("--out", default="matches.csv")
+    m.add_argument("--check", action="store_true", help="check due employers first")
+    m.add_argument("--no-reed", action="store_true", help="skip Reed discovery and market demand")
+    m.set_defaults(fn=cmd_match)
 
     args = p.parse_args(argv)
     settings = get_settings()

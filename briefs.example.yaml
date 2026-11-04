@@ -1,0 +1,10 @@
+# Candidate briefs: role profiles only. Never names, CVs, contact details or salaries.
+agency: MCM Recruitment Solutions
+sector_keywords: [m&e, building services, commercial]
+briefs:
+  - {role: Electrical Estimator, location: Warrington, radius: 30}
+  - {role: Mechanical Pre-Construction Manager, location: Manchester, radius: 35}
+  - {role: Electrical Pre-Construction Manager, location: Warrington, radius: 40}
+  - {role: Mechanical Design Engineer, location: Preston, radius: 30}
+  - {role: Electrical Site Manager, location: Manchester, radius: 25}
+  - {role: Electrical Project Manager, location: Manchester, radius: 25}

@@ -18,3 +18,4 @@ def test_migrations_and_upsert_sql():
     proc = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ALL SQL CHECKS PASSED" in proc.stdout
+    assert "ALL ROLE MATCH SQL CHECKS PASSED" in proc.stdout

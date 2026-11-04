@@ -63,7 +63,7 @@ end $$;
 set "request.jwt.claim.sub" = '00000000-0000-0000-0000-000000000001';
 do $$ begin
   if (select count(*) from listings) <> 3 then raise exception 'RLS: owner cannot read listings'; end if;
-  if (select count(*) from templates) <> 5 then raise exception 'seed templates missing'; end if;
+  if (select count(*) from templates where channel <> 'linkedin' or name <> 'Role Match DM') < 5 then raise exception 'seed templates missing'; end if;
 end $$;
 reset role;
 
