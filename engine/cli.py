@@ -25,7 +25,6 @@ from pathlib import Path
 
 from app.collect import run_all, run_search
 from app.config import get_settings, setup_logging
-from app.db import SupabaseRepo
 from app.reed_client import ReedClient
 
 FIXTURE = Path(__file__).parent / "tests" / "fixtures" / "reed_search_sample.json"
@@ -41,8 +40,12 @@ def _reed(settings) -> ReedClient:
     )
 
 
-def _repo(settings) -> SupabaseRepo:
-    return SupabaseRepo(settings.supabase_url, settings.supabase_service_role_key)
+def _repo(settings):
+    from app.pg import PgStore
+
+    if not settings.database_url:
+        raise SystemExit("DATABASE_URL is not set (see .env.example)")
+    return PgStore(settings.database_url)
 
 
 def _print_result(r) -> None:
@@ -111,17 +114,17 @@ def _role_services(args, settings, *, need_fetcher=False, need_wayback=False, ne
     from app.geo import Geocoder
     from app.polite import PoliteFetcher
     from app.role_match import Services
-    from app.role_repo import LocalRoleRepo, SupabaseRoleRepo
+    from app.role_repo import LocalRoleRepo
     from app.wayback import Wayback
 
     store = args.store
     if store == "auto":
-        store = "supabase" if (settings.supabase_url and settings.supabase_service_role_key) else "local"
-    if store == "supabase":
-        repo = SupabaseRoleRepo(settings.supabase_url, settings.supabase_service_role_key)
+        store = "db" if settings.database_url else "local"
+    if store == "db":
+        repo = _repo(settings)
     else:
         repo = LocalRoleRepo(LOCAL_STORE)
-        print(f"(using local store {LOCAL_STORE.name}; set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY to use Supabase)",
+        print(f"(using local store {LOCAL_STORE.name}; set DATABASE_URL to use the database)",
               file=sys.stderr)
     reed = None
     if need_reed and settings.reed_api_key:
@@ -211,7 +214,7 @@ def cmd_employers_import_ch(args, settings) -> int:
     from app.role_seed import SEED_SIC_CODES
 
     svc = _role_services(args, settings)
-    ch = CompaniesHouseClient(os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip())
+    ch = CompaniesHouseClient(settings.companies_house_api_key)
     sics = [s.strip() for s in (args.sic or ",".join(SEED_SIC_CODES)).split(",") if s.strip()]
     rows = employer_rows_from_search(ch.advanced_search(sics, args.location, args.size))
     for r in rows:
@@ -248,8 +251,8 @@ def cmd_match(args, settings) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="cli.py", description="Repost Radar engine")
-    p.add_argument("--store", choices=["auto", "local", "supabase"], default="auto",
-                   help="Role Match storage (auto = Supabase if configured, else a local JSON file)")
+    p.add_argument("--store", choices=["auto", "local", "db"], default="auto",
+                   help="Role Match storage (auto = the database if DATABASE_URL is set, else a local JSON file)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("run", help="run one saved search")

@@ -1,8 +1,7 @@
 """Database access.
 
-`SupabaseRepo` talks to Supabase's REST API (PostgREST) with the service
-role key, server-side only. `MemoryRepo` has the same interface and the
-same upsert semantics, and is used by tests.
+The real store is `app.pg.PgStore` (direct Postgres). `MemoryRepo` has the
+same collector interface and upsert semantics, and is used by tests.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-import httpx
 
 log = logging.getLogger("db")
 
@@ -64,86 +62,6 @@ def _now() -> str:
 
 class DBError(Exception):
     pass
-
-
-class SupabaseRepo:
-    def __init__(self, url: str, service_role_key: str, *, transport: httpx.BaseTransport | None = None):
-        if not url or not service_role_key:
-            raise DBError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
-        self._http = httpx.Client(
-            base_url=f"{url.rstrip('/')}/rest/v1",
-            headers={
-                "apikey": service_role_key,
-                "Authorization": f"Bearer {service_role_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=60.0,
-            transport=transport,
-        )
-
-    def close(self) -> None:
-        self._http.close()
-
-    def _check(self, resp: httpx.Response) -> Any:
-        if resp.is_error:
-            raise DBError(f"Supabase {resp.request.method} {resp.request.url.path} "
-                          f"returned {resp.status_code}: {resp.text[:300]}")
-        if not resp.content:
-            return None
-        return resp.json()
-
-    def get_search(self, search_id: int) -> Search | None:
-        rows = self._check(self._http.get("/searches", params={"id": f"eq.{int(search_id)}", "select": "*"}))
-        return Search.from_row(rows[0]) if rows else None
-
-    def list_active_searches(self) -> list[Search]:
-        rows = self._check(self._http.get("/searches", params={"active": "eq.true", "select": "*", "order": "id"}))
-        return [Search.from_row(r) for r in rows]
-
-    def create_search(self, label, keywords, location, radius_miles, min_salary) -> Search:
-        rows = self._check(self._http.post(
-            "/searches",
-            json={"label": label, "keywords": keywords, "location": location,
-                  "radius_miles": radius_miles, "min_salary": min_salary},
-            headers={"Prefer": "return=representation"},
-        ))
-        return Search.from_row(rows[0])
-
-    def create_run(self, search_id: int) -> int:
-        rows = self._check(self._http.post(
-            "/runs", json={"search_id": search_id, "status": "running"},
-            headers={"Prefer": "return=representation"},
-        ))
-        return rows[0]["id"]
-
-    def finish_run(self, run_id, *, status, api_calls, listings_seen, new_listings, error) -> None:
-        self._check(self._http.patch(
-            "/runs", params={"id": f"eq.{int(run_id)}"},
-            json={"status": status, "finished_at": _now(), "api_calls": api_calls,
-                  "listings_seen": listings_seen, "new_listings": new_listings, "error": error},
-        ))
-
-    def get_run(self, run_id: int) -> dict[str, Any] | None:
-        rows = self._check(self._http.get("/runs", params={"id": f"eq.{int(run_id)}", "select": "*"}))
-        return rows[0] if rows else None
-
-    def touch_search(self, search_id: int) -> None:
-        self._check(self._http.patch("/searches", params={"id": f"eq.{int(search_id)}"},
-                                     json={"last_run_at": _now()}))
-
-    def get_overrides(self) -> dict[str, bool]:
-        rows = self._check(self._http.get("/employer_overrides", params={"select": "employer_norm,is_agency"}))
-        return {r["employer_norm"]: bool(r["is_agency"]) for r in rows}
-
-    def upsert_listings(self, search_id: int, rows: list[dict[str, Any]]) -> int:
-        new = 0
-        for i in range(0, len(rows), UPSERT_BATCH):
-            batch = rows[i:i + UPSERT_BATCH]
-            result = self._check(self._http.post(
-                "/rpc/upsert_listings", json={"p_search_id": search_id, "p_rows": batch},
-            ))
-            new += int(result or 0)
-        return new
 
 
 @dataclass

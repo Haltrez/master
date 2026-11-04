@@ -63,8 +63,15 @@ def _words(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     reed_api_key: str = ""
-    supabase_url: str = ""
-    supabase_service_role_key: str = ""
+    database_url: str = ""
+    companies_house_api_key: str = ""
+    adzuna_app_id: str = ""
+    adzuna_app_key: str = ""
+    brave_api_key: str = ""
+    hunter_api_key: str = ""
+    engine_api_secret: str = ""
+    enable_docs: bool = False
+    owner_email: str = ""
     reed_max_calls_per_run: int = 300
     reed_requests_per_second: float = 1.0
     reed_max_tries: int = 5
@@ -74,7 +81,17 @@ class Settings:
     lookback_days: int = 90
 
     def secret_values(self) -> list[str]:
-        return [s for s in (self.reed_api_key, self.supabase_service_role_key) if s]
+        return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.brave_api_key,
+                            self.hunter_api_key, self.engine_api_secret, _db_password(self.database_url)) if s]
+
+
+def _db_password(url: str) -> str:
+    """The password part of a postgres:// URL, so logs can mask it."""
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(url).password or ""
+    except ValueError:
+        return ""
 
 
 def get_settings() -> Settings:
@@ -82,8 +99,15 @@ def get_settings() -> Settings:
     load_dotenv(REPO_ROOT / ".env")
     return Settings(
         reed_api_key=os.environ.get("REED_API_KEY", "").strip(),
-        supabase_url=os.environ.get("SUPABASE_URL", "").strip().rstrip("/"),
-        supabase_service_role_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
+        database_url=os.environ.get("DATABASE_URL", "").strip(),
+        companies_house_api_key=os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip(),
+        adzuna_app_id=os.environ.get("ADZUNA_APP_ID", "").strip(),
+        adzuna_app_key=os.environ.get("ADZUNA_APP_KEY", "").strip(),
+        brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip(),
+        hunter_api_key=os.environ.get("HUNTER_API_KEY", "").strip(),
+        engine_api_secret=os.environ.get("ENGINE_API_SECRET", "").strip(),
+        enable_docs=os.environ.get("ENABLE_DOCS", "").strip().lower() in ("1", "true", "yes"),
+        owner_email=os.environ.get("OWNER_EMAIL", "").strip(),
         reed_max_calls_per_run=_int("REED_MAX_CALLS_PER_RUN", 300),
         reed_requests_per_second=_float("REED_REQUESTS_PER_SECOND", 1.0),
         reed_max_tries=_int("REED_MAX_TRIES", 5),

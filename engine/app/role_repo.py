@@ -1,8 +1,8 @@
 """Storage for Role Match.
 
-`SupabaseRoleRepo` uses Supabase's REST API with the service role key (server
-side only). `LocalRoleRepo` keeps the same tables in a local JSON file so the
-CLI works before Supabase is set up; tests use it too.
+The real store is `app.pg.PgStore`. `LocalRoleRepo` keeps the same tables in
+a local JSON file so the Role Match CLI works without a database; tests use
+it too.
 
 Rows are plain dicts with the column names from 003_role_match.sql.
 """
@@ -15,9 +15,6 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
-import httpx
-
-from .db import DBError
 from .normalise import employer_norm
 from .role_seed import ROLE_FAMILIES, SEED_EMPLOYERS
 
@@ -190,115 +187,3 @@ class LocalRoleRepo:
     def hot_lead_keys(self, keys):
         known = {r["lead_key"] for r in self.t["hot_leads"]}
         return known & set(keys)
-
-
-class SupabaseRoleRepo:
-    def __init__(self, url: str, service_role_key: str, *, transport: httpx.BaseTransport | None = None):
-        if not url or not service_role_key:
-            raise DBError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
-        self._http = httpx.Client(
-            base_url=f"{url.rstrip('/')}/rest/v1",
-            headers={"apikey": service_role_key, "Authorization": f"Bearer {service_role_key}",
-                     "Content-Type": "application/json"},
-            timeout=60.0, transport=transport,
-        )
-
-    def save(self) -> None:  # writes are immediate
-        pass
-
-    def _ok(self, resp: httpx.Response) -> Any:
-        if resp.is_error:
-            raise DBError(f"Supabase {resp.request.method} {resp.request.url.path} returned "
-                          f"{resp.status_code}: {resp.text[:300]}")
-        return resp.json() if resp.content else None
-
-    def _get(self, table: str, **params) -> list[dict]:
-        return self._ok(self._http.get(f"/{table}", params={"select": "*", **params}))
-
-    def _post(self, table: str, row: dict | list, prefer: str = "return=representation", **params) -> list[dict]:
-        body = [{k: _jsonable(v) for k, v in r.items()} for r in row] if isinstance(row, list) else \
-            {k: _jsonable(v) for k, v in row.items()}
-        return self._ok(self._http.post(f"/{table}", json=body, params=params, headers={"Prefer": prefer}))
-
-    def _patch(self, table: str, row_id: int, fields: dict) -> None:
-        self._ok(self._http.patch(f"/{table}", params={"id": f"eq.{int(row_id)}"},
-                                  json={k: _jsonable(v) for k, v in fields.items()}))
-
-    def families(self):
-        return self._get("role_families", order="id")
-
-    def employers(self):
-        return self._get("employers", order="id")
-
-    def add_employer(self, row):
-        norm = employer_norm(row["name"])
-        existing = self._get("employers", name_norm=f"eq.{norm}")
-        if existing:
-            cur = existing[0]
-            fill = {k: row[k] for k in EMPLOYER_FILL_ONLY if row.get(k) not in (None, "") and cur.get(k) in (None, "")}
-            if fill:
-                self._patch("employers", cur["id"], fill)
-                cur.update(fill)
-            return cur
-        return self._post("employers", {**{k: v for k, v in row.items() if v is not None}, "name_norm": norm})[0]
-
-    def update_employer(self, employer_id, fields):
-        self._patch("employers", employer_id, fields)
-
-    def jobs(self, employer_id=None):
-        params = {"employer_id": f"eq.{int(employer_id)}"} if employer_id is not None else {}
-        return self._get("employer_jobs", order="id", **params)
-
-    def upsert_job(self, row):
-        payload = {k: v for k, v in row.items() if v is not None or k == "location_text"}
-        payload["last_seen_at"] = utcnow()
-        return self._post("employer_jobs", payload, "resolution=merge-duplicates,return=representation",
-                          on_conflict="employer_id,url")[0]
-
-    def update_job(self, job_id, fields):
-        self._patch("employer_jobs", job_id, fields)
-
-    def agency_by_name(self, name):
-        rows = self._get("agencies", name_norm=f"eq.{employer_norm(name)}")
-        return rows[0] if rows else None
-
-    def create_agency(self, name):
-        return self._post("agencies", {"name": name, "name_norm": employer_norm(name)})[0]
-
-    def briefs(self, agency_id):
-        return self._get("candidate_briefs", agency_id=f"eq.{int(agency_id)}", order="id")
-
-    def save_brief(self, row):
-        for b in self.briefs(row["agency_id"]):
-            if b["role_family_id"] == row["role_family_id"] and b["location"].lower() == row["location"].lower():
-                self._patch("candidate_briefs", b["id"], row)
-                return {**b, **row}
-        return self._post("candidate_briefs", row)[0]
-
-    def matches_for(self, brief_ids):
-        if not brief_ids:
-            return []
-        return self._get("brief_matches", brief_id=f"in.({','.join(str(int(i)) for i in brief_ids)})")
-
-    def upsert_match(self, row):
-        return self._post("brief_matches", row, "resolution=merge-duplicates,return=representation",
-                          on_conflict="brief_id,employer_job_id")[0]
-
-    def cache_get(self, key, max_age_days=None):
-        rows = self._get("http_cache", key=f"eq.{key}")
-        if not rows:
-            return None
-        if max_age_days is not None and utcnow() - parse_ts(rows[0]["fetched_at"]) > dt.timedelta(days=max_age_days):
-            return None
-        return rows[0]["value"]
-
-    def cache_set(self, key, value):
-        self._post("http_cache", {"key": key, "value": value, "fetched_at": utcnow()},
-                   "resolution=merge-duplicates,return=minimal", on_conflict="key")
-
-    def hot_lead_keys(self, keys):
-        if not keys:
-            return set()
-        rows = self._ok(self._http.get("/hot_leads", params={"select": "lead_key",
-                                                             "lead_key": f"in.({','.join(keys)})"}))
-        return {r["lead_key"] for r in rows}

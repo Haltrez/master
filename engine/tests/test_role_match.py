@@ -229,3 +229,21 @@ def test_no_personal_data_columns_in_role_match_schema():
     sql = (ROOT / "supabase" / "migrations" / "003_role_match.sql").read_text(encoding="utf-8").lower()
     for col in ("first_name", "last_name", "full_name", "email", "phone", "cv ", "candidate_name", "dob"):
         assert col not in sql
+
+
+def test_six_brief_end_to_end_on_postgres(web, clock, store):
+    from app.pg import PgStore  # noqa: F401
+    t = web.transport
+    svc = Services(repo=store, settings=Settings(reed_api_key=TEST_KEY, reed_requests_per_second=0),
+                   fetcher=PoliteFetcher(transport=t, sleep=clock.sleep, clock=clock.monotonic),
+                   geocoder=Geocoder(store, transport=t, sleep=clock.sleep, clock=clock.monotonic),
+                   wayback=Wayback(store, transport=t, sleep=clock.sleep, clock=clock.monotonic))
+    import_briefs(svc, ROOT / "briefs.example.yaml")
+    # Postgres clock is real time; check with a wall clock that matches it.
+    svc.clock = __import__("app.role_repo", fromlist=["utcnow"]).utcnow
+    check_employers(svc)
+    report = run_match(svc, AGENCY, use_reed=False)
+    got = matched(report)
+    assert ("Electrical Project Manager - Manchester", "DL M&E Building Services Ltd", "Electrical Project Manager") in got
+    assert ("Electrical Estimator - Warrington", "Central Electrical & Mechanical NW Ltd", "Electrical Estimator") in got
+    assert store.val("select count(*) from brief_matches") == len(report.rows)

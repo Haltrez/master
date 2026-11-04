@@ -17,7 +17,7 @@ trap cleanup EXIT
 "${RUN[@]}" "$PG_BIN/pg_ctl" -D "$WORK/data" -o "-k $WORK -c listen_addresses=''" -l "$WORK/log" -w start >/dev/null
 PSQL=("${RUN[@]}" "$PG_BIN/psql" -h "$WORK" -U postgres -d postgres -v ON_ERROR_STOP=1 -q)
 
-"${PSQL[@]}" -f "$HERE/00_supabase_stub.sql"
+"${PSQL[@]}" -f "$ROOT/supabase/compat/plain_postgres.sql"
 for f in "$ROOT"/supabase/migrations/*.sql; do "${PSQL[@]}" -f "$f"; done
 "${PSQL[@]}" -f "$ROOT/supabase/seed.sql"
 "${PSQL[@]}" -f "$ROOT/supabase/seed_role_match.sql"

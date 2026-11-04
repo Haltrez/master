@@ -78,3 +78,6 @@ class FakeReed:
     @property
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handler)
+
+
+from tests.pgfixture import pg_dsn, store  # noqa: E402,F401  (shared DB fixtures)

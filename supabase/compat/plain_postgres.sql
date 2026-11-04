@@ -1,4 +1,5 @@
--- Local-only stand-ins for what Supabase provides (roles + auth.uid()).
+-- Stand-ins for what Supabase provides (roles + auth.uid()), for running
+-- the migrations on plain Postgres (local tests, or self-hosted on Hetzner).
 -- Never run this against a real Supabase project.
 do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
