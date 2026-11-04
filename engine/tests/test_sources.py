@@ -80,7 +80,7 @@ INDEED = [{"key": "abc123", "url": "https://uk.indeed.com/viewjob?jk=abc123", "t
 def test_apify_indeed_run_and_fields():
     runs = []
     page = list(apify(INDEED, runs).pages("management accountant", "Leeds", 15, True))[0]
-    assert runs[0] == {"country": "gb", "title": "management accountant", "location": "Leeds", "limit": 300, "datePosted": "14"}
+    assert runs[0] == {"country": "uk", "title": "management accountant", "location": "Leeds", "limit": 300, "datePosted": "14"}
     j = page[0]
     assert j.source_says_repost and j.employer_name == "Euro Car Parks" and j.maximum_salary == 46000
     assert "description" not in j.raw and j.raw["isRepost"] is True

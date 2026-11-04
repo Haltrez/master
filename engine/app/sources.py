@@ -209,7 +209,7 @@ class ApifyIndeedClient:
         return r.json()
 
     def pages(self, keyword: str, location: str, radius_miles: int, first_run: bool) -> Iterator[list[Job]]:
-        items = self._items({"country": "gb", "title": keyword, "location": location, "limit": self.max_items,
+        items = self._items({"country": "uk", "title": keyword, "location": location, "limit": self.max_items,
                              "datePosted": self.first_run_days if first_run else self.daily_days})
         log.info("apify indeed kw=%r location=%r items=%d", keyword, location, len(items))
         jobs = []
