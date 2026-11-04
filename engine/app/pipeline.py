@@ -35,6 +35,13 @@ def make_adzuna(settings: Settings):
     return AdzunaClient(settings.adzuna_app_id, settings.adzuna_app_key)
 
 
+def make_theirstack(settings: Settings):
+    if not settings.theirstack_api_key:
+        return None
+    from .theirstack_client import TheirStackClient
+    return TheirStackClient(settings.theirstack_api_key)
+
+
 def threshold(store, settings: Settings) -> int:
     try:
         return int(store.setting("repost_threshold", settings.repost_threshold))
@@ -61,10 +68,12 @@ def rebuild_all(store, settings: Settings, reed=None) -> dict[str, Any]:
 def collect_one(store, settings: Settings, search_id: int, run_id: int | None = None) -> RunResult:
     reed, adzuna = make_reed(settings), make_adzuna(settings)
     return run_search(search_id, repo=store, reed=reed, settings=settings, adzuna=adzuna, run_id=run_id,
+                      theirstack=make_theirstack(settings),
                       after_run=lambda r: rebuild_all(store, settings, reed))
 
 
 def collect_all(store, settings: Settings, run_ids: dict[int, int] | None = None) -> list[RunResult]:
     reed, adzuna = make_reed(settings), make_adzuna(settings)
     return run_all(repo=store, reed=reed, settings=settings, adzuna=adzuna, run_ids=run_ids,
+                   theirstack=make_theirstack(settings),
                    after_run=lambda r: rebuild_all(store, settings, reed))

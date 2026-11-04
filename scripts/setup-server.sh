@@ -73,10 +73,11 @@ ask REED_API_KEY "Reed API key"
 ask COMPANIES_HOUSE_API_KEY "Companies House API key"
 ask ADZUNA_APP_ID "Adzuna app id"
 ask ADZUNA_APP_KEY "Adzuna app key"
+ask THEIRSTACK_API_KEY "TheirStack API key"
 ask BRAVE_API_KEY "Brave Search API key"
 ask HUNTER_API_KEY "Hunter.io API key"
 for kv in REPOST_THRESHOLD=3 LOOKBACK_DAYS=90 REED_MAX_CALLS_PER_RUN=300 REED_REQUESTS_PER_SECOND=1 \
-          ADZUNA_MAX_CALLS_PER_RUN=40 ENABLE_DOCS=0; do
+          ADZUNA_MAX_CALLS_PER_RUN=40 THEIRSTACK_MAX_JOBS_PER_RUN=100 THEIRSTACK_BACKFILL_DAYS=90 ENABLE_DOCS=0; do
   [ -n "$(get "${kv%%=*}")" ] || put "${kv%%=*}" "${kv#*=}"
 done
 # Daily 06:00 UK collection from the server itself, so history starts building now.

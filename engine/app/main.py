@@ -743,6 +743,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         s = db()
         return {"settings": s.settings(),
                 "configured": {"reed": bool(settings.reed_api_key), "adzuna": bool(settings.adzuna_app_id),
+                               "theirstack": bool(settings.theirstack_api_key),
                                "companies_house": bool(settings.companies_house_api_key),
                                "brave": bool(settings.brave_api_key), "hunter": bool(settings.hunter_api_key)}}
 

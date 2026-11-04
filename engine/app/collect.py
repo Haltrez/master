@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 from collections.abc import Callable
@@ -26,6 +27,7 @@ class RunResult:
     new_listings: int = 0
     reclassified: int = 0
     adzuna_calls: int = 0
+    theirstack_jobs: int = 0
     error: str | None = None
     by_posted_by: dict[str, int] = field(default_factory=lambda: {"employer": 0, "agency": 0})
     after_run: dict[str, Any] = field(default_factory=dict)
@@ -101,8 +103,17 @@ def listing_row(job: Any, posted_by: PostedBy, source: str = "reed") -> dict[str
     }
 
 
+def _near(job, center, radius_miles: float, town: str) -> bool:
+    """Keep a TheirStack job if it's within the radius (by its coordinates) or names the search town."""
+    from .geo import miles_between
+    if center and job.lat is not None and job.lng is not None:
+        return miles_between(center, (float(job.lat), float(job.lng))) <= radius_miles
+    return bool(town) and town.lower() in (job.location_name or "").lower()
+
+
 def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings: Settings, adzuna=None,
-               run_id: int | None = None, after_run: Callable[[RunResult], dict] | None = None) -> RunResult:
+               run_id: int | None = None, after_run: Callable[[RunResult], dict] | None = None,
+               theirstack=None, geocoder=None) -> RunResult:
     search = repo.get_search(search_id)
     if search is None:
         raise ValueError(f"search {search_id} not found")
@@ -131,7 +142,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
     try:
         if not search.keywords:
             raise ValueError("search has no keywords")
-        if reed is None and adzuna is None:
+        if reed is None and adzuna is None and theirstack is None:
             raise ValueError("no job source configured (set REED_API_KEY and/or ADZUNA_APP_ID/ADZUNA_APP_KEY)")
         overrides = repo.get_overrides()
         if reed is not None:
@@ -152,6 +163,30 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
             except ReedError as exc:
                 # Adzuna is a second source: a failure there doesn't fail the run.
                 log.warning("run %d: adzuna stopped early: %s", run_id, exc)
+        if theirstack is not None:
+            known = set(settings.known_agency_brands)
+            if hasattr(repo, "known_agency_norms"):
+                known |= repo.known_agency_norms()
+            # First run of a search pulls history (so reposts show from day one); later runs the last 3 days.
+            flag = f"theirstack:backfilled:{search_id}"
+            has_cache = hasattr(repo, "cache_get")
+            backfilled = has_cache and repo.cache_get(flag) is not None
+            days = 3 if backfilled else settings.theirstack_backfill_days
+            if geocoder is None and has_cache:
+                from .geo import Geocoder
+                geocoder = Geocoder(repo)
+            place = geocoder.geocode(search.location) if geocoder else None
+            center = (place.lat, place.lng) if place else None
+            try:
+                for page in theirstack.iter_search_pages(list(search.keywords), max_age_days=days,
+                                                         max_jobs=settings.theirstack_max_jobs_per_run):
+                    near = [j for j in page if _near(j, center, search.radius_miles * 1.2, search.location)]
+                    result.theirstack_jobs += len(page)
+                    store_page(near, "employer", "theirstack", known)
+                if has_cache:
+                    repo.cache_set(flag, {"at": dt.datetime.now(dt.timezone.utc).isoformat()})
+            except ReedError as exc:
+                log.warning("run %d: theirstack stopped early: %s", run_id, exc)
         result.status = "ok"
     except Exception as exc:
         result.status = "error"
@@ -180,7 +215,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
     return result
 
 
-def run_all(*, repo: Repo, reed: ReedClient | None, settings: Settings, adzuna=None,
+def run_all(*, repo: Repo, reed: ReedClient | None, settings: Settings, adzuna=None, theirstack=None,
             after_run: Callable[[RunResult], dict] | None = None,
             run_ids: dict[int, int] | None = None) -> list[RunResult]:
     """Run every active search one after another. One failure doesn't stop the rest.
@@ -189,6 +224,7 @@ def run_all(*, repo: Repo, reed: ReedClient | None, settings: Settings, adzuna=N
     searches = repo.list_active_searches()
     for search in searches:
         results.append(run_search(search.id, repo=repo, reed=reed, settings=settings, adzuna=adzuna,
+                                  theirstack=theirstack,
                                   run_id=(run_ids or {}).get(search.id)))
     if after_run is not None and results:
         try:

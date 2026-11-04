@@ -82,6 +82,7 @@ class Settings:
     companies_house_api_key: str = ""
     adzuna_app_id: str = ""
     adzuna_app_key: str = ""
+    theirstack_api_key: str = ""
     brave_api_key: str = ""
     hunter_api_key: str = ""
     engine_api_secret: str = ""
@@ -95,10 +96,12 @@ class Settings:
     repost_threshold: int = 3
     lookback_days: int = 90
     adzuna_max_calls_per_run: int = 40
+    theirstack_max_jobs_per_run: int = 100     # 1 credit per job
+    theirstack_backfill_days: int = 90         # first run of a search pulls this much history
     known_agency_brands: tuple[str, ...] = field(default=KNOWN_AGENCY_BRANDS)
 
     def secret_values(self) -> list[str]:
-        return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.brave_api_key,
+        return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.theirstack_api_key, self.brave_api_key,
                             self.hunter_api_key, self.engine_api_secret, _db_password(self.database_url)) if s]
 
 
@@ -121,6 +124,9 @@ def get_settings() -> Settings:
         companies_house_api_key=os.environ.get("COMPANIES_HOUSE_API_KEY", "").strip(),
         adzuna_app_id=os.environ.get("ADZUNA_APP_ID", "").strip(),
         adzuna_app_key=os.environ.get("ADZUNA_APP_KEY", "").strip(),
+        theirstack_api_key=os.environ.get("THEIRSTACK_API_KEY", "").strip(),
+        theirstack_max_jobs_per_run=_int("THEIRSTACK_MAX_JOBS_PER_RUN", 100),
+        theirstack_backfill_days=_int("THEIRSTACK_BACKFILL_DAYS", 90),
         brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip(),
         hunter_api_key=os.environ.get("HUNTER_API_KEY", "").strip(),
         engine_api_secret=os.environ.get("ENGINE_API_SECRET", "").strip(),
