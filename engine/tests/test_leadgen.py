@@ -94,3 +94,15 @@ def test_stale_and_single_postings_are_not_candidates(store):
     store.q("update hot_leads set posting_count_90d = 1 where lead_key = 'k1'")
     rows, stats = pick(store, O.get_order(store, o["id"]), Tools(claude=FakeHaiku()), 5)
     assert rows == [] and stats["candidates"] == 0
+
+
+def test_a_vetoed_company_stays_out_on_later_runs(store):
+    o = make(store, industry="Sales & Marketing", leads_wanted=10)
+    label = "Sales & Marketing - Leeds"
+    add_leads(store, 1, label=label, title="Sales Executive", description="Our client is hiring")
+    order = O.get_order(store, o["id"])
+    assert pick(store, order, Tools(claude=FakeHaiku()), 10)[0] == []
+    # a clean-looking ad from the same company later: still out
+    add_leads(store, 1, label=label, title="Sales Manager", start=1)
+    store.q("update hot_leads set employer_name = 'Company 0', employer_norm = 'company 0' where lead_key = 'k1'")
+    assert pick(store, order, Tools(claude=FakeHaiku()), 10)[0] == []

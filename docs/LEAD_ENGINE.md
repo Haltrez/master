@@ -46,17 +46,19 @@ before Haiku, so out-of-area ads cost nothing.
 ## 5. Claude Haiku reads every candidate ad
 
 Haiku (the cheapest model) gets the full ad text and the industry's in/out definition, 8 ads per call
-with strict JSON output, and answers yes/no to four questions:
+with strict JSON output, and answers yes/no to five questions:
 
 | signal | yes means |
 |---|---|
 | industry_fit | the job itself is in the industry (not just mentioned) |
 | direct_employer | the company advertising is the employer, not an agency, job board or outsourced team |
+| not_recruitment_firm | the employer isn't itself a recruitment/staffing business (a recruiter hiring its own sales team is a competitor of the client, not a lead) |
 | real_vacancy | a real job: not a talent pool, franchise, commission-only, self-employed or course ad |
-| agency_would_fill | an agency could get paid to fill it: not an apprenticeship, in-house grad scheme or mass seasonal hiring |
+| agency_would_fill | an agency could get paid to fill it (permanent, fixed-term, contract, maternity cover and entry-level all count): not an apprenticeship, internship, in-house grad scheme or mass seasonal hiring |
 
-**Four yeses or it's out.** If any ad from a company is judged "not a direct employer" (a fundraising
-agency, an outsourced sales team), the whole company is out, so it can't slip through on another ad. Haiku also returns the clean role name and a short reason. Each verdict
+**Five yeses or it's out.** If any ad from a company is judged "not a direct employer" (a fundraising
+agency, an outsourced sales team, a recruiter), the whole company is out, so it can't slip through on
+another ad. A recruiter advertising for a client is also marked as an agency everywhere from then on. Haiku also returns the clean role name and a short reason. Each verdict
 is cached per industry + ad, so an ad is read once (roughly £0.01-0.03 per 100 ads). For Reed, where
 search results only carry a snippet, the full ad is fetched first. If Claude is unreachable, those
 ads simply wait for the next run: nothing unchecked goes out.

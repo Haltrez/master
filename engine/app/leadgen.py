@@ -222,7 +222,8 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
     for i in range(0, len(cands), CHUNK):
         if len(good) >= owed or judged >= MAX_JUDGED_PER_FILL:
             break
-        chunk = [l for l in cands[i:i + CHUNK] if l["employer_norm"] not in bad_company]
+        chunk = [l for l in cands[i:i + CHUNK] if l["employer_norm"] not in bad_company | vetoed
+                 and store.cache_get(f"veto:{l['employer_norm']}") is None]
         all_ads = _ads(store, [j for l in chunk for j in (l.get("job_ids") or [])])
         items = []
         for l in chunk:
@@ -246,13 +247,12 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
                 stats["not_judged"] += 1
                 continue
             stats["judged"] += 1
-            if v.by == "haiku" and v.signals.get("direct_employer") is False:
+            if v.by == "haiku" and (v.signals.get("direct_employer") is False
+                                    or v.signals.get("not_recruitment_firm") is False):
                 vetoed.add(l["employer_norm"])
                 good.pop(l["employer_norm"], None)
-            if v.by == "haiku" and v.signals.get("not_recruitment_firm") is False:
-                vetoed.add(l["employer_norm"])
-                good.pop(l["employer_norm"], None)
-                if v.signals.get("direct_employer") is False:
+                store.cache_set(f"veto:{l['employer_norm']}", {"reason": v.reason, "ad": ad["job_id"]})
+                if v.signals.get("direct_employer") is False and v.signals.get("not_recruitment_firm") is False:
                     # a recruiter advertising for a client: an agency everywhere from now on
                     # (leaves hot leads, joins the agencies list, like a Companies House recruitment SIC)
                     store.mark_employer_agency(l["employer_norm"])
