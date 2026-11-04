@@ -317,7 +317,7 @@ class _DetectMixin:
     def save_hot_leads(self, leads: list[dict]) -> None:
         cols = ("lead_key", "employer_name", "employer_norm", "title", "title_norm", "location_name",
                 "location_norm", "posting_count_90d", "first_seen_at", "last_seen_at", "live_now", "long_open",
-                "score", "latest_url", "job_ids", "expiration_date", "sources")
+                "score", "latest_url", "job_ids", "expiration_date", "sources", "old_ad_url", "archive_prior")
         sql = (f"insert into hot_leads ({', '.join(cols)}, updated_at) values ({', '.join(['%s'] * len(cols))}, now()) "
                "on conflict (lead_key) do update set "
                + ", ".join(f"{c} = excluded.{c}" for c in cols if c not in ("lead_key", "latest_url"))
@@ -341,6 +341,19 @@ class _DetectMixin:
             returning lead_key""", (list(keep),))
         self.q("update hot_leads set live_now = false where not (lead_key = any(%s))", (list(keep),))
         return len(rows)
+
+    def archive_evidence_map(self) -> dict[str, dict]:
+        return {r["group_key"]: r for r in self.q("select * from archive_evidence")}
+
+    def archive_checked_since(self, since: dt.datetime) -> set[str]:
+        return {r["group_key"] for r in self.q("select group_key from archive_evidence where checked_at >= %s", (since,))}
+
+    def save_archive_evidence(self, key: str, employer_norm: str, title_norm: str, ev: dict) -> None:
+        self.q("""insert into archive_evidence (group_key, employer_norm, title_norm, prior_count, oldest_capture, old_url, checked_at)
+                  values (%s, %s, %s, %s, %s, %s, now()) on conflict (group_key) do update set
+                  prior_count = excluded.prior_count, oldest_capture = excluded.oldest_capture,
+                  old_url = excluded.old_url, checked_at = now()""",
+               (key, employer_norm, title_norm, ev.get("prior_count") or 0, ev.get("oldest_capture"), ev.get("old_url")))
 
     def known_agency_norms(self) -> set[str]:
         """Employers Reed told us are agencies, plus manual overrides."""

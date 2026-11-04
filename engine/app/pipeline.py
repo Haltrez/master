@@ -54,8 +54,16 @@ def rebuild_all(store, settings: Settings, reed=None) -> dict[str, Any]:
     from .agencies import rebuild_agencies
     from .detect import rebuild_hot_leads
     out: dict[str, Any] = {}
-    out["hot_leads"] = rebuild_hot_leads(store, threshold=threshold(store, settings),
-                                         lookback_days=settings.lookback_days, reed=reed)
+    from .wayback import ArchiveReposts, Wayback
+
+    def flag(key, default):
+        v = store.setting(key, default)
+        return v if v is not None else default
+
+    out["hot_leads"] = rebuild_hot_leads(
+        store, threshold=threshold(store, settings), lookback_days=settings.lookback_days, reed=reed,
+        archive=ArchiveReposts(Wayback(store, max_consecutive_failures=5)) if flag("archive_checks_per_run", 150) else None,
+        max_archive_checks=int(flag("archive_checks_per_run", 150)), reposts_only=bool(flag("reposts_only", True)))
     out["agencies"] = rebuild_agencies(store, lookback_days=settings.lookback_days)
     from .lead_contacts import enrich_new_lead_companies
     try:

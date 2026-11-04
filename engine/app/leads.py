@@ -52,7 +52,7 @@ def lead_rows(store, leads: list[dict], today: dt.date, default_search: dict | N
         jobs = sorted((history[j] for j in (l.get("job_ids") or []) if j in history),
                       key=lambda h: h["first_seen_at"], reverse=True)
         latest = l.get("latest_url") or (jobs[0]["url"] if jobs else None)
-        previous = next((h["url"] for h in jobs if h["url"] and h["url"] != latest), "")
+        previous = next((h["url"] for h in jobs if h["url"] and h["url"] != latest), "") or l.get("old_ad_url") or ""
         salaries = [h["max_salary"] or h["min_salary"] for h in jobs if (h["max_salary"] or h["min_salary"])]
         c = contacts.get(l["employer_norm"])
         rows.append({

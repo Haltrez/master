@@ -70,13 +70,33 @@ def _is_live(l: Listing, latest_run: dict[int, dt.datetime], now: dt.datetime) -
     return l.last_seen_at >= now - DEFAULT_LIVE_WINDOW
 
 
+def _reposted(ls: list[Listing]) -> bool:
+    """An earlier ad ended before a later one started: posted, expired, posted again."""
+    by_source: dict[str, list[Listing]] = defaultdict(list)
+    for l in ls:
+        by_source[l.source].append(l)
+    for group in by_source.values():
+        group.sort(key=lambda l: l.first_seen_at)
+        earliest_end = None
+        for l in group:
+            if earliest_end is not None and earliest_end < l.first_seen_at:
+                return True
+            earliest_end = l.last_seen_at if earliest_end is None else min(earliest_end, l.last_seen_at)
+    return False
+
+
 def compute_hot_leads(
     listings: list[Listing],
     latest_run: dict[int, dt.datetime],
     now: dt.datetime,
     threshold: int = 3,
     lookback_days: int = 90,
+    archive: dict[str, dict] | None = None,
+    reposts_only: bool = False,
 ) -> list[dict[str, Any]]:
+    """archive: group key -> {"prior_count", "oldest_capture", "old_url"} from the Wayback Machine.
+    reposts_only: hot only when the role was posted, ended and posted again (ours or archived)."""
+    archive = archive or {}
     cutoff = now - dt.timedelta(days=lookback_days)
     groups: dict[str, list[Listing]] = defaultdict(list)
     for l in listings:
@@ -96,7 +116,14 @@ def compute_hot_leads(
             live_by_source[l.source].add(l.job_id)
         day_one = any(len(v) >= 2 for v in live_by_source.values())
         long_open = any((l.last_seen_at - l.opened()).days >= LONG_OPEN_DAYS for l in ls)
-        if not (count >= threshold or long_open or day_one):
+        ev = archive.get(key) or {}
+        prior = int(ev.get("prior_count") or 0)
+        count += prior
+        repost = _reposted(ls) or prior > 0
+        if reposts_only:
+            if not (repost and count >= threshold):
+                continue
+        elif not (count >= threshold or long_open or day_one):
             continue
         latest = max(ls, key=lambda l: (l.first_seen_at, l.job_id))
         leads.append({
@@ -108,7 +135,11 @@ def compute_hot_leads(
             "location_name": latest.location_name,
             "location_norm": latest.location_norm,
             "posting_count_90d": max(count, 1),
-            "first_seen_at": min(l.opened() for l in ls),
+            "first_seen_at": min([l.opened() for l in ls] + ([dt.datetime.combine(ev["oldest_capture"], dt.time(),
+                                 tzinfo=dt.timezone.utc)] if ev.get("oldest_capture") else [])),
+            "old_ad_url": ev.get("old_url"),
+            "archive_prior": prior,
+            "reposted": repost,
             "last_seen_at": max(l.last_seen_at for l in ls),
             "live_now": bool(live),
             "long_open": long_open,
@@ -133,13 +164,38 @@ def compute_hot_leads(
     return leads
 
 
+def check_archive(store, listings: list[Listing], archive, now: dt.datetime, max_checks: int = 150) -> int:
+    """Wayback lookups for live company+role groups not checked in 30 days (best-effort, capped)."""
+    live: dict[str, Listing] = {}
+    for l in listings:
+        if l.last_seen_at >= now - dt.timedelta(days=2):
+            cur = live.get(l.key)
+            if cur is None or l.first_seen_at < cur.first_seen_at:
+                live[l.key] = l
+    fresh = store.archive_checked_since(now - dt.timedelta(days=30))
+    todo = [k for k in live if k not in fresh][:max_checks]
+    for k in todo:
+        l = live[k]
+        first = min(l.opened(), l.first_seen_at).date()
+        ev = archive.prior_postings(l.employer_name, l.title, l.title_norm, before=first)
+        store.save_archive_evidence(k, l.employer_norm, l.title_norm, ev)
+    if todo:
+        log.info("archive: checked %d company+role groups", len(todo))
+    return len(todo)
+
+
 def rebuild_hot_leads(store, *, threshold: int = 3, lookback_days: int = 90, reed=None,
-                      max_detail_calls: int = 50, now: dt.datetime | None = None) -> dict[str, int]:
+                      max_detail_calls: int = 50, now: dt.datetime | None = None, archive=None,
+                      max_archive_checks: int = 150, reposts_only: bool = False) -> dict[str, int]:
     """Recompute hot_leads from the database. Keeps every status the owner set."""
     now = now or dt.datetime.now(dt.timezone.utc)
     rows = store.employer_listings_since(now - dt.timedelta(days=lookback_days))
     listings = [Listing(**r) for r in rows]
-    leads = compute_hot_leads(listings, store.latest_run_starts(), now, threshold, lookback_days)
+    if archive is not None:
+        check_archive(store, listings, archive, now, max_checks=max_archive_checks)
+    evidence = store.archive_evidence_map() if hasattr(store, "archive_evidence_map") else {}
+    leads = compute_hot_leads(listings, store.latest_run_starts(), now, threshold, lookback_days,
+                              archive=evidence, reposts_only=reposts_only)
     before = store.hot_lead_status_map()
     new_keys = [l["lead_key"] for l in leads if l["lead_key"] not in before]
 

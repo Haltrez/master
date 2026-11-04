@@ -750,7 +750,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.patch("/settings", dependencies=A)
     def patch_settings(body: dict[str, Any]):
         s = db()
-        allowed = {"repost_threshold", "daily_outreach_target", "sender_name", "make_webhooks"}
+        allowed = {"repost_threshold", "daily_outreach_target", "sender_name", "make_webhooks", "reposts_only",
+                   "archive_checks_per_run", "lead_contacts_per_run"}
         bad = set(body) - allowed
         if bad:
             raise HTTPException(422, f"unknown settings {sorted(bad)}")

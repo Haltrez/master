@@ -7,7 +7,8 @@ const HOOKS = [["new_client", "New client onboarding (Scenario 4)"], ["matches_t
 
 export function SettingsForm({ settings }: { settings: any }) {
   const [f, setF] = useState({ repost_threshold: settings.repost_threshold ?? 3, daily_outreach_target: settings.daily_outreach_target ?? 100,
-    sender_name: settings.sender_name ?? "", make_webhooks: settings.make_webhooks ?? {} });
+    sender_name: settings.sender_name ?? "", make_webhooks: settings.make_webhooks ?? {},
+    reposts_only: settings.reposts_only ?? true });
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string>();
   async function save(e: React.FormEvent) {
@@ -22,6 +23,11 @@ export function SettingsForm({ settings }: { settings: any }) {
           <div><Label>Daily outreach target</Label><Input type="number" min={1} value={f.daily_outreach_target} onChange={(e) => setF({ ...f, daily_outreach_target: e.target.value })} /></div>
           <div><Label>Repost threshold</Label><Input type="number" min={2} value={f.repost_threshold} onChange={(e) => setF({ ...f, repost_threshold: e.target.value })} /></div>
         </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={!!f.reposts_only} onChange={(e) => setF({ ...f, reposts_only: e.target.checked })} />
+          <span><b>Reposts only</b>: a hot lead must have been posted, ended and posted again (our history or the Wayback Machine).
+            Off also counts ads open 30+ days and two copies live at once.</span>
+        </label>
         <div><Label>Sender name (email footer)</Label><Input value={f.sender_name} onChange={(e) => setF({ ...f, sender_name: e.target.value })} /></div>
         {HOOKS.map(([k, label]) => (
           <div key={k}><Label>Make.com webhook: {label}</Label>
