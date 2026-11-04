@@ -51,7 +51,7 @@ def _plain(row: dict | None) -> dict | None:
     return {k: (float(v) if isinstance(v, Decimal) else v) for k, v in row.items()}
 
 
-class PgStore:
+class _CoreStore:
     def __init__(self, dsn: str):
         if not dsn:
             raise ValueError("DATABASE_URL is not set")
@@ -287,3 +287,194 @@ def batched(items: Iterable[Any], n: int) -> Iterable[list[Any]]:
 
 def as_json(v: Any) -> str:
     return json.dumps(v, default=_jsonable)
+
+
+# =============================================================================
+# Phase 2: detection queries (mixed into PgStore below)
+# =============================================================================
+class _DetectMixin:
+    def employer_listings_since(self, since: dt.datetime) -> list[dict]:
+        return self.q("""
+            select l.job_id, l.source, l.employer_name, l.employer_norm, l.title, l.title_norm,
+                   l.location_name, coalesce(l.location_norm, '') as location_norm, l.first_seen_at,
+                   l.last_seen_at, l.posted_date, l.expiration_date, l.url,
+                   coalesce(array_agg(ls.search_id) filter (where ls.search_id is not null), '{}') as search_ids
+            from listings l left join listing_searches ls on ls.job_id = l.job_id
+            where l.posted_by = 'employer' and l.last_seen_at >= %s
+            group by l.job_id""", (since,))
+
+    def latest_run_starts(self) -> dict[int, dt.datetime]:
+        return {r["search_id"]: r["started"] for r in self.q(
+            "select search_id, max(started_at) as started from runs where status <> 'error' "
+            "and search_id is not null group by search_id")}
+
+    def hot_lead_status_map(self) -> dict[str, str]:
+        return {r["lead_key"]: r["status"] for r in self.q("select lead_key, status from hot_leads")}
+
+    def save_hot_leads(self, leads: list[dict]) -> None:
+        cols = ("lead_key", "employer_name", "employer_norm", "title", "title_norm", "location_name",
+                "location_norm", "posting_count_90d", "first_seen_at", "last_seen_at", "live_now", "long_open",
+                "score", "latest_url", "job_ids", "expiration_date", "sources")
+        sql = (f"insert into hot_leads ({', '.join(cols)}, updated_at) values ({', '.join(['%s'] * len(cols))}, now()) "
+               "on conflict (lead_key) do update set "
+               + ", ".join(f"{c} = excluded.{c}" for c in cols if c not in ("lead_key", "latest_url"))
+               + ", latest_url = coalesce(excluded.latest_url, hot_leads.latest_url), updated_at = now()")
+        with self.conn.transaction():
+            with self.conn.cursor() as cur:
+                for lead in leads:
+                    cur.execute(sql, [lead[c] for c in cols])
+                keys = [l["lead_key"] for l in leads]
+                cur.execute("delete from hot_lead_searches where lead_key = any(%s)", (keys,))
+                for lead in leads:
+                    for sid in lead.get("search_ids", []):
+                        cur.execute("insert into hot_lead_searches (lead_key, search_id) values (%s, %s) "
+                                    "on conflict do nothing", (lead["lead_key"], sid))
+
+    def prune_hot_leads(self, keep: set[str]) -> int:
+        """Leads that cooled off: drop untouched ones; keep anything the owner or a client used."""
+        rows = self.q("""
+            delete from hot_leads h where h.status = 'new' and not (h.lead_key = any(%s))
+              and not exists (select 1 from deliveries d where d.lead_key = h.lead_key)
+            returning lead_key""", (list(keep),))
+        self.q("update hot_leads set live_now = false where not (lead_key = any(%s))", (list(keep),))
+        return len(rows)
+
+    def known_agency_norms(self) -> set[str]:
+        """Employers Reed told us are agencies, plus manual overrides."""
+        rows = self.q("select distinct employer_norm from listings where posted_by = 'agency' and source = 'reed' "
+                      "union select employer_norm from employer_overrides where is_agency")
+        return {r["employer_norm"] for r in rows}
+
+    def hot_leads(self, *, search_id: int | None = None, min_score: int | None = None,
+                  since: dt.datetime | None = None, status: str | None = None, live_only: bool = False,
+                  limit: int = 500) -> list[dict]:
+        where, params = ["true"], []
+        if search_id:
+            where.append("exists (select 1 from hot_lead_searches s where s.lead_key = h.lead_key and s.search_id = %s)")
+            params.append(search_id)
+        if min_score is not None:
+            where.append("h.score >= %s"); params.append(min_score)
+        if since:
+            where.append("h.updated_at >= %s"); params.append(since)
+        if status:
+            where.append("h.status = %s"); params.append(status)
+        if live_only:
+            where.append("h.live_now")
+        params.append(limit)
+        return self.q(f"""select h.*, coalesce((select array_agg(search_id) from hot_lead_searches s
+                                                where s.lead_key = h.lead_key), '{{}}') as search_ids
+                          from hot_leads h where {' and '.join(where)}
+                          order by h.score desc, h.last_seen_at desc limit %s""", params)
+
+
+# =============================================================================
+# Phase 3: agencies and contacts
+# =============================================================================
+OWNER_AGENCY_FIELDS = {"stage", "notes", "website", "next_follow_up", "name"}
+AGENCY_STAGES = ("new", "researching", "contacted", "replied", "call_booked", "pilot", "paid", "lost",
+                 "do_not_contact")
+
+
+class _AgencyMixin:
+    def rebuild_agencies_sql(self, since: dt.datetime) -> dict[str, int]:
+        with self.conn.transaction():
+            before = self.val("select count(*) from agencies")
+            self.q("""
+                with ads as (
+                  select employer_norm, mode() within group (order by employer_name) as name,
+                         source, count(distinct job_id) as n
+                  from listings where posted_by = 'agency' and last_seen_at >= %s and employer_norm <> ''
+                  group by employer_norm, source
+                ), per as (
+                  select employer_norm, max(name) as name, max(n) as n from ads group by employer_norm
+                )
+                insert into agencies (name, name_norm, ads_count_90d)
+                select name, employer_norm, n from per
+                on conflict (name_norm) do update set ads_count_90d = excluded.ads_count_90d""", (since,))
+            self.q("""update agencies a set ads_count_90d = 0 where not exists (
+                        select 1 from listings l where l.posted_by = 'agency' and l.employer_norm = a.name_norm
+                        and l.last_seen_at >= %s)""", (since,))
+            self.q("delete from agency_searches")
+            self.q("""
+                insert into agency_searches (agency_id, search_id, ads_count)
+                select agency_id, search_id, max(n) from (
+                  select a.id as agency_id, ls.search_id, l.source, count(distinct l.job_id) as n
+                  from listings l join listing_searches ls on ls.job_id = l.job_id
+                  join agencies a on a.name_norm = l.employer_norm
+                  where l.posted_by = 'agency' and l.last_seen_at >= %s
+                  group by a.id, ls.search_id, l.source) per_source
+                group by agency_id, search_id""", (since,))
+            total = self.val("select count(*) from agencies where ads_count_90d > 0")
+            after = self.val("select count(*) from agencies")
+        return {"agencies": total, "new": after - before}
+
+    def agencies_list(self, *, stage: str | None = None, search_id: int | None = None, q: str | None = None,
+                      limit: int = 1000) -> list[dict]:
+        where, params = ["true"], []
+        if stage:
+            where.append("a.stage = %s"); params.append(stage)
+        if search_id:
+            where.append("exists (select 1 from agency_searches s where s.agency_id = a.id and s.search_id = %s)")
+            params.append(search_id)
+        if q:
+            where.append("a.name ilike %s"); params.append(f"%{q}%")
+        params.append(limit)
+        return self.q(f"""
+            select a.*,
+              (select c.full_name from contacts c where c.agency_id = a.id and not c.do_not_contact
+                 order by (c.source = 'companies_house') desc, c.id limit 1) as director_name,
+              (select string_agg(distinct s.label, ', ') from agency_searches x join searches s on s.id = x.search_id
+                 where x.agency_id = a.id) as niches,
+              (select count(*) from contacts c where c.agency_id = a.id and c.email_verified) as verified_emails,
+              (select max(happened_at) from activities t where t.agency_id = a.id) as last_activity_at
+            from agencies a where {' and '.join(where)}
+            order by a.ads_count_90d desc, a.name limit %s""", params)
+
+    def get_agency(self, agency_id: int) -> dict | None:
+        return self.one("select * from agencies where id = %s", (agency_id,))
+
+    def update_agency(self, agency_id: int, fields: dict) -> dict | None:
+        return self._update("agencies", agency_id, fields)
+
+    def contacts(self, agency_id: int) -> list[dict]:
+        return self.q("select * from contacts where agency_id = %s order by (source = 'companies_house') desc, id",
+                      (agency_id,))
+
+    def contact(self, contact_id: int) -> dict | None:
+        return self.one("select * from contacts where id = %s", (contact_id,))
+
+    def add_contact(self, row: dict) -> dict | None:
+        """Insert unless the same person is already on the agency. Returns the new row or None."""
+        exists = self.one("select id from contacts where agency_id = %s and lower(full_name) = lower(%s)",
+                          (row["agency_id"], row["full_name"]))
+        if exists:
+            return None
+        if row.get("email") and self.is_suppressed(row["email"]):
+            row = {**row, "email": None, "email_verified": False}
+        return self._insert("contacts", row)
+
+    def update_contact(self, contact_id: int, fields: dict) -> dict | None:
+        if fields.get("email") and self.is_suppressed(fields["email"]):
+            raise ValueError("this email is on the suppression list")
+        return self._update("contacts", contact_id, fields)
+
+    def agency_live_ads(self, agency_id: int, days: int = 14, limit: int = 50) -> list[dict]:
+        return self.q("""select l.job_id, l.title, l.location_name, l.url, l.first_seen_at, l.last_seen_at, l.source
+                         from listings l join agencies a on a.name_norm = l.employer_norm
+                         where a.id = %s and l.posted_by = 'agency' and l.last_seen_at >= now() - make_interval(days => %s)
+                         order by l.last_seen_at desc limit %s""", (agency_id, days, limit))
+
+    def agency_search_ids(self, agency_id: int) -> list[int]:
+        return [r["search_id"] for r in self.q("select search_id from agency_searches where agency_id = %s "
+                                               "order by ads_count desc", (agency_id,))]
+
+    def agencies_to_enrich(self, limit: int = 50) -> list[dict]:
+        return self.q("select * from agencies where ch_checked_at is null and stage <> 'do_not_contact' "
+                      "order by ads_count_90d desc limit %s", (limit,))
+
+
+# =============================================================================
+# The store: every mixin above. New query groups are added as mixins.
+# =============================================================================
+class PgStore(_CoreStore, _DetectMixin, _AgencyMixin):
+    pass

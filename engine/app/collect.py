@@ -1,16 +1,17 @@
-"""Run a saved search against Reed and store every listing."""
+"""Run a saved search against Reed (and Adzuna when configured) and store every listing."""
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Settings
 from .db import Repo
 from .normalise import employer_norm, location_norm, title_norm
-from .reed_client import CallBudget, PostedBy, ReedClient, ReedJob
+from .reed_client import CallBudget, PostedBy, ReedClient, ReedError
 
 log = logging.getLogger("collect")
 
@@ -24,8 +25,10 @@ class RunResult:
     listings_seen: int = 0
     new_listings: int = 0
     reclassified: int = 0
+    adzuna_calls: int = 0
     error: str | None = None
     by_posted_by: dict[str, int] = field(default_factory=lambda: {"employer": 0, "agency": 0})
+    after_run: dict[str, Any] = field(default_factory=dict)
 
 
 def agency_name_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
@@ -34,11 +37,34 @@ def agency_name_pattern(words: tuple[str, ...]) -> re.Pattern[str]:
     return re.compile(r"\b(" + alts + r")", re.IGNORECASE)
 
 
+# "Hays Accountancy & Finance", "Michael Page Engineering": a brand plus a
+# recruiting-division word. "Hays Travel" stays an employer.
+DIVISION_WORDS = {"accountancy", "finance", "recruitment", "construction", "property", "technology", "it",
+                  "engineering", "specialist", "talent", "executive", "legal", "healthcare", "education",
+                  "office", "support", "banking", "tax", "hr", "human", "resources", "digital", "energy",
+                  "life", "sciences", "procurement", "supply", "chain", "sales", "marketing", "interim",
+                  "contract", "temp", "temps", "industrial", "logistics", "uk", "group"}
+
+
+def is_known_agency(norm: str, known: set[str] | None) -> bool:
+    if not known or not norm:
+        return False
+    if norm in known:
+        return True
+    for brand in known:
+        if norm.startswith(brand + " ") and len(brand) >= 4:
+            rest = norm[len(brand) + 1:].split()
+            if rest and rest[0] in DIVISION_WORDS:
+                return True
+    return False
+
+
 def classify(
-    job: ReedJob,
+    job: Any,
     queried_as: PostedBy,
     overrides: dict[str, bool],
     agency_pattern: re.Pattern[str],
+    known_agencies: set[str] | None = None,
 ) -> tuple[PostedBy, str | None]:
     """Return (posted_by, reason-if-reclassified)."""
     norm = employer_norm(job.employer_name)
@@ -46,16 +72,18 @@ def classify(
         forced: PostedBy = "agency" if overrides[norm] else "employer"
         return forced, (f"override is_agency={overrides[norm]}" if forced != queried_as else None)
     if queried_as == "employer":
+        if is_known_agency(norm, known_agencies):
+            return "agency", "known agency"
         m = agency_pattern.search(job.employer_name)
         if m:
             return "agency", f"name contains '{m.group(1).lower()}'"
     return queried_as, None
 
 
-def listing_row(job: ReedJob, posted_by: PostedBy) -> dict[str, Any]:
+def listing_row(job: Any, posted_by: PostedBy, source: str = "reed") -> dict[str, Any]:
     return {
         "job_id": job.job_id,
-        "source": "reed",
+        "source": source,
         "posted_by": posted_by,
         "employer_id": job.employer_id,
         "employer_name": job.employer_name,
@@ -73,40 +101,57 @@ def listing_row(job: ReedJob, posted_by: PostedBy) -> dict[str, Any]:
     }
 
 
-def run_search(search_id: int, *, repo: Repo, reed: ReedClient, settings: Settings) -> RunResult:
+def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings: Settings, adzuna=None,
+               run_id: int | None = None, after_run: Callable[[RunResult], dict] | None = None) -> RunResult:
     search = repo.get_search(search_id)
     if search is None:
         raise ValueError(f"search {search_id} not found")
 
-    run_id = repo.create_run(search_id)
+    run_id = run_id or repo.create_run(search_id)
     result = RunResult(run_id=run_id, search_id=search_id, status="running")
     budget = CallBudget(settings.reed_max_calls_per_run)
+    adz_budget = CallBudget(settings.adzuna_max_calls_per_run)
     pattern = agency_name_pattern(settings.agency_name_words)
     seen: dict[int, PostedBy] = {}
     log.info("run %d: search %d '%s' started", run_id, search_id, search.label)
 
+    def store_page(page, queried_as: PostedBy, source: str, known: set[str] | None) -> None:
+        rows: dict[int, dict[str, Any]] = {}
+        for job in page:
+            posted_by, reason = classify(job, queried_as, overrides, pattern, known)
+            if reason:
+                result.reclassified += 1
+                log.info("run %d: reclassified '%s' (job %d) %s -> %s: %s",
+                         run_id, job.employer_name, job.job_id, queried_as, posted_by, reason)
+            rows[job.job_id] = listing_row(job, posted_by, source)
+            seen[job.job_id] = posted_by
+        if rows:
+            result.new_listings += repo.upsert_listings(search_id, list(rows.values()))
+
     try:
         if not search.keywords:
             raise ValueError("search has no keywords")
+        if reed is None and adzuna is None:
+            raise ValueError("no job source configured (set REED_API_KEY and/or ADZUNA_APP_ID/ADZUNA_APP_KEY)")
         overrides = repo.get_overrides()
-        for keyword in search.keywords:
-            for queried_as in ("employer", "agency"):
-                pages = reed.iter_search_pages(
-                    keyword, search.location, search.radius_miles, search.min_salary,
-                    queried_as, budget=budget,  # type: ignore[arg-type]
-                )
-                for page in pages:
-                    rows: dict[int, dict[str, Any]] = {}
-                    for job in page:
-                        posted_by, reason = classify(job, queried_as, overrides, pattern)  # type: ignore[arg-type]
-                        if reason:
-                            result.reclassified += 1
-                            log.info("run %d: reclassified '%s' (job %d) %s -> %s: %s",
-                                     run_id, job.employer_name, job.job_id, queried_as, posted_by, reason)
-                        rows[job.job_id] = listing_row(job, posted_by)
-                        seen[job.job_id] = posted_by
-                    if rows:
-                        result.new_listings += repo.upsert_listings(search_id, list(rows.values()))
+        if reed is not None:
+            for keyword in search.keywords:
+                for queried_as in ("employer", "agency"):
+                    for page in reed.iter_search_pages(keyword, search.location, search.radius_miles,
+                                                       search.min_salary, queried_as, budget=budget):  # type: ignore[arg-type]
+                        store_page(page, queried_as, "reed", None)  # type: ignore[arg-type]
+        if adzuna is not None:
+            known = set(settings.known_agency_brands)
+            if hasattr(repo, "known_agency_norms"):
+                known |= repo.known_agency_norms()
+            try:
+                for keyword in search.keywords:
+                    for page in adzuna.iter_search_pages(keyword, search.location, search.radius_miles,
+                                                         search.min_salary, budget=adz_budget):
+                        store_page(page, "employer", "adzuna", known)
+            except ReedError as exc:
+                # Adzuna is a second source: a failure there doesn't fail the run.
+                log.warning("run %d: adzuna stopped early: %s", run_id, exc)
         result.status = "ok"
     except Exception as exc:
         result.status = "error"
@@ -114,22 +159,40 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient, settings: Settin
         log.exception("run %d: failed: %s", run_id, result.error)
     finally:
         result.api_calls = budget.used
+        result.adzuna_calls = adz_budget.used
         result.listings_seen = len(seen)
         for pb in seen.values():
             result.by_posted_by[pb] += 1
-        repo.finish_run(run_id, status=result.status, api_calls=result.api_calls,
+        repo.finish_run(run_id, status=result.status, api_calls=result.api_calls + result.adzuna_calls,
                         listings_seen=result.listings_seen, new_listings=result.new_listings,
                         error=result.error)
         repo.touch_search(search_id)
-        log.info("run %d: %s api_calls=%d listings_seen=%d new_listings=%d employer=%d agency=%d reclassified=%d",
-                 run_id, result.status, result.api_calls, result.listings_seen, result.new_listings,
-                 result.by_posted_by["employer"], result.by_posted_by["agency"], result.reclassified)
+        log.info("run %d: %s reed_calls=%d adzuna_calls=%d listings_seen=%d new_listings=%d employer=%d agency=%d "
+                 "reclassified=%d", run_id, result.status, result.api_calls, result.adzuna_calls,
+                 result.listings_seen, result.new_listings, result.by_posted_by["employer"],
+                 result.by_posted_by["agency"], result.reclassified)
+    if after_run is not None:
+        try:
+            result.after_run = after_run(result) or {}
+        except Exception as exc:  # rebuilding must not hide the run result
+            log.exception("run %d: after-run rebuild failed: %s", run_id, exc)
+            result.after_run = {"error": str(exc)}
     return result
 
 
-def run_all(*, repo: Repo, reed: ReedClient, settings: Settings) -> list[RunResult]:
-    """Run every active search one after another. One failure doesn't stop the rest."""
+def run_all(*, repo: Repo, reed: ReedClient | None, settings: Settings, adzuna=None,
+            after_run: Callable[[RunResult], dict] | None = None,
+            run_ids: dict[int, int] | None = None) -> list[RunResult]:
+    """Run every active search one after another. One failure doesn't stop the rest.
+    Hot leads and agencies are rebuilt once at the end (after_run gets the last result)."""
     results = []
-    for search in repo.list_active_searches():
-        results.append(run_search(search.id, repo=repo, reed=reed, settings=settings))
+    searches = repo.list_active_searches()
+    for search in searches:
+        results.append(run_search(search.id, repo=repo, reed=reed, settings=settings, adzuna=adzuna,
+                                  run_id=(run_ids or {}).get(search.id)))
+    if after_run is not None and results:
+        try:
+            results[-1].after_run = after_run(results[-1]) or {}
+        except Exception as exc:
+            log.exception("after-run rebuild failed: %s", exc)
     return results

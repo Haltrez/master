@@ -27,6 +27,20 @@ DEFAULT_AGENCY_NAME_WORDS: tuple[str, ...] = (
 )
 
 
+# Big UK agency brands whose names don't contain an agency word. Used to keep
+# agency ads out of hot leads on sources (Adzuna) that don't flag agencies.
+KNOWN_AGENCY_BRANDS: tuple[str, ...] = (
+    "hays", "michael page", "page personnel", "robert half", "reed", "reed specialist recruitment", "randstad",
+    "adecco", "manpower", "manpowergroup", "harvey nash", "robert walters", "goodman masson", "morgan mckinley",
+    "badenoch and clark", "office angels", "brook street", "pertemps", "search consultancy", "gi group",
+    "kelly services", "blue arrow", "matchtech", "gold group", "sanderson", "hunter selection", "jac recruitment",
+    "huntress", "nigel frank", "jefferson frank", "hydrogen", "cpl", "rullion", "anderselite",
+    "fawkes and reece", "hays construction", "sthree", "computer futures", "real staffing",
+    "jonathan lee", "lorien", "akkodis", "modis", "kforce", "allegis", "aston carter",
+    "acorn by synergie", "nrl", "fircroft", "ernest gordon", "ernest gordon recruitment",
+)
+
+
 def load_dotenv(path: Path) -> None:
     """Minimal KEY=VALUE .env reader. Does not override existing env vars."""
     if not path.is_file():
@@ -79,6 +93,8 @@ class Settings:
     agency_name_words: tuple[str, ...] = field(default=DEFAULT_AGENCY_NAME_WORDS)
     repost_threshold: int = 3
     lookback_days: int = 90
+    adzuna_max_calls_per_run: int = 40
+    known_agency_brands: tuple[str, ...] = field(default=KNOWN_AGENCY_BRANDS)
 
     def secret_values(self) -> list[str]:
         return [s for s in (self.reed_api_key, self.companies_house_api_key, self.adzuna_app_key, self.brave_api_key,
@@ -115,6 +131,7 @@ def get_settings() -> Settings:
         agency_name_words=_words("AGENCY_NAME_WORDS", DEFAULT_AGENCY_NAME_WORDS),
         repost_threshold=_int("REPOST_THRESHOLD", 3),
         lookback_days=_int("LOOKBACK_DAYS", 90),
+        adzuna_max_calls_per_run=_int("ADZUNA_MAX_CALLS_PER_RUN", 40),
     )
 
 

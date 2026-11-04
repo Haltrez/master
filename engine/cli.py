@@ -23,7 +23,6 @@ import os
 import sys
 from pathlib import Path
 
-from app.collect import run_all, run_search
 from app.config import get_settings, setup_logging
 from app.reed_client import ReedClient
 
@@ -57,21 +56,59 @@ def _print_result(r) -> None:
         print(f"  error: {r.error}")
 
 
+def _print_rebuild(out: dict) -> None:
+    if not out:
+        return
+    if "error" in out:
+        print(f"  rebuild failed: {out['error']}")
+        return
+    h, a = out.get("hot_leads", {}), out.get("agencies", {})
+    print(f"  hot leads: {h.get('hot', 0)} ({h.get('new', 0)} new)  agencies: {a.get('agencies', 0)} "
+          f"({a.get('new', 0)} new)")
+
+
 def cmd_run(args, settings) -> int:
-    with _reed(settings) as reed:
-        r = run_search(args.search_id, repo=_repo(settings), reed=reed, settings=settings)
+    from app.pipeline import collect_one
+
+    r = collect_one(_repo(settings), settings, args.search_id)
     _print_result(r)
+    _print_rebuild(r.after_run)
     return 0 if r.status == "ok" else 1
 
 
 def cmd_run_all(args, settings) -> int:
-    with _reed(settings) as reed:
-        results = run_all(repo=_repo(settings), reed=reed, settings=settings)
+    from app.pipeline import collect_all
+
+    results = collect_all(_repo(settings), settings)
     if not results:
         print("No active searches. Add one with: python cli.py add-search ...")
     for r in results:
         _print_result(r)
+    if results:
+        _print_rebuild(results[-1].after_run)
     return 0 if all(r.status == "ok" for r in results) else 1
+
+
+def cmd_rebuild(args, settings) -> int:
+    from app.pipeline import make_reed, rebuild_all
+
+    _print_rebuild(rebuild_all(_repo(settings), settings, make_reed(settings)))
+    return 0
+
+
+def cmd_hot_leads(args, settings) -> int:
+    rows = _repo(settings).hot_leads(search_id=args.search_id, min_score=args.min_score, status=args.status,
+                                     limit=args.top)
+    if not rows:
+        print("No hot leads yet. They appear once the same role is posted again, an ad stays open 30+ days, "
+              "or two copies run at once.")
+        return 0
+    print(f"{'score':>5}  {'employer':<32} {'role':<36} {'town':<14} {'posts':>5}  {'since':<10} live  status")
+    for h in rows:
+        print(f"{h['score']:>5}  {h['employer_name'][:32]:<32} {h['title'][:36]:<36} {(h['location_name'] or '')[:14]:<14} "
+              f"{h['posting_count_90d']:>5}  {h['first_seen_at']:%d %b %Y}  {'yes ' if h['live_now'] else 'no  '}  "
+              f"{h['status']}")
+    return 0
 
 
 def cmd_add_search(args, settings) -> int:
@@ -83,6 +120,68 @@ def cmd_add_search(args, settings) -> int:
     print(f"Created search {s.id}: {s.label} | {', '.join(s.keywords)} | "
           f"{s.location} +{s.radius_miles} miles" + (f" | min £{s.min_salary}" if s.min_salary else ""))
     print(f"Run it with: python cli.py run --search-id {s.id}")
+    return 0
+
+
+def _enrichers(settings, store):
+    from app.ch_client import CachedCompaniesHouse, CompaniesHouseClient
+    from app.web_lookup import Brave, Hunter
+
+    ch = CachedCompaniesHouse(CompaniesHouseClient(settings.companies_house_api_key), store)
+    brave = Brave(settings.brave_api_key) if settings.brave_api_key else None
+    hunter = Hunter(settings.hunter_api_key) if settings.hunter_api_key else None
+    return ch, brave, hunter
+
+
+def cmd_agencies(args, settings) -> int:
+    from app.agencies import compliance_label
+
+    rows = _repo(settings).agencies_list(search_id=args.search_id, stage=args.stage)
+    if not rows:
+        print("No agencies yet. They come from agency ads collected by your searches.")
+    print(f"{'id':>5}  {'agency':<36} {'ads':>4}  {'stage':<14} {'director':<22} email outreach")
+    for a in rows:
+        print(f"{a['id']:>5}  {a['name'][:36]:<36} {a['ads_count_90d']:>4}  {a['stage']:<14} "
+              f"{(a['director_name'] or '-')[:22]:<22} {compliance_label(a)}")
+    return 0
+
+
+def cmd_enrich(args, settings) -> int:
+    from app.agencies import enrich_agency
+
+    store = _repo(settings)
+    ch, brave, hunter = _enrichers(settings, store)
+    if args.agency_id:
+        ids = args.agency_id
+    else:
+        ids = [a["id"] for a in store.agencies_to_enrich(limit=args.limit)]
+    for i in ids:
+        r = enrich_agency(store, i, ch, brave=brave, hunter=hunter)
+        extra = "".join(f", {k.replace('_', ' ')}: {v}" for k, v in r.items()
+                        if k in ("directors_added", "website", "emails_found"))
+        print(f"{i:>5}  {r['name'][:36]:<36} {r['companies_house']}{extra}")
+    if not ids:
+        print("Nothing to enrich.")
+    return 0
+
+
+def cmd_employers_find_careers(args, settings) -> int:
+    from app.web_lookup import Brave
+
+    if not settings.brave_api_key:
+        print("error: BRAVE_API_KEY is not set", file=sys.stderr)
+        return 2
+    svc = _role_services(args, settings)
+    brave = Brave(settings.brave_api_key)
+    todo = [e for e in svc.repo.employers() if not e.get("careers_url")
+            and (args.id is None or e["id"] in args.id)][: args.limit]
+    for e in todo:
+        url = brave.find_careers_url(e["name"], e.get("town"), (e.get("website") or "").replace("https://", "")
+                                     .replace("http://", "").strip("/") or None)
+        if url:
+            svc.repo.update_employer(e["id"], {"careers_url": url, "status": "active"})
+        print(f"{e['id']:>5}  {e['name'][:40]:<40} {url or 'no careers page found'}")
+    svc.repo.save()
     return 0
 
 
@@ -270,6 +369,27 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--min-salary", type=int, default=None)
     a.set_defaults(fn=cmd_add_search)
 
+    rb = sub.add_parser("rebuild", help="recompute hot leads and agencies now")
+    rb.set_defaults(fn=cmd_rebuild)
+
+    hl = sub.add_parser("hot-leads", help="print hot leads")
+    hl.add_argument("--search-id", type=int)
+    hl.add_argument("--top", type=int, default=20)
+    hl.add_argument("--min-score", type=int)
+    hl.add_argument("--status", choices=["new", "used", "ignored"])
+    hl.set_defaults(fn=cmd_hot_leads)
+
+    ag = sub.add_parser("agencies", help="list prospect agencies")
+    ag.add_argument("--search-id", type=int)
+    ag.add_argument("--stage")
+    ag.set_defaults(fn=cmd_agencies)
+
+    en = sub.add_parser("enrich", help="Companies House (+ Brave website, Hunter emails if keys set)")
+    en.add_argument("--agency-id", type=int, action="append")
+    en.add_argument("--all-new", action="store_true", help="every agency not checked yet (default)")
+    en.add_argument("--limit", type=int, default=50)
+    en.set_defaults(fn=cmd_enrich)
+
     s = sub.add_parser("reed-sample", help="save one real Reed response as the test fixture")
     s.add_argument("--keywords", default="management accountant")
     s.add_argument("--location", default="Leeds")
@@ -316,6 +436,11 @@ def main(argv: list[str] | None = None) -> int:
     ei.add_argument("--location")
     ei.add_argument("--size", type=int, default=100)
     ei.set_defaults(fn=cmd_employers_import_ch)
+
+    ef = esub.add_parser("find-careers", help="find careers pages for research-queue employers (Brave)")
+    ef.add_argument("--id", type=int, action="append")
+    ef.add_argument("--limit", type=int, default=25)
+    ef.set_defaults(fn=cmd_employers_find_careers)
 
     m = sub.add_parser("match", help="match an agency's briefs to direct employers")
     m.add_argument("--agency", required=True)
