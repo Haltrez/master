@@ -325,7 +325,8 @@ class _DetectMixin:
     def save_hot_leads(self, leads: list[dict]) -> None:
         cols = ("lead_key", "employer_name", "employer_norm", "title", "title_norm", "location_name",
                 "location_norm", "posting_count_90d", "first_seen_at", "last_seen_at", "live_now", "long_open",
-                "score", "latest_url", "job_ids", "expiration_date", "sources", "old_ad_url", "archive_prior")
+                "score", "latest_url", "job_ids", "expiration_date", "sources", "old_ad_url", "archive_prior",
+                "posting_dates", "previous_url", "flagged_repost")
         sql = (f"insert into hot_leads ({', '.join(cols)}, updated_at) values ({', '.join(['%s'] * len(cols))}, now()) "
                "on conflict (lead_key) do update set "
                + ", ".join(f"{c} = excluded.{c}" for c in cols if c not in ("lead_key", "latest_url"))

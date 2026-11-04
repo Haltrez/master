@@ -105,6 +105,22 @@ def top_up_orders(store, settings: Settings) -> list[dict]:
     from .google_sheets import Sheets
     from .orders import top_up_all
     strict = store.setting("verified_companies_only", True)
-    from .fit import make_client
     return top_up_all(store, settings, sheets=Sheets.from_store(store, settings), strict=True if strict is None else bool(strict),
-                      claude=make_client(settings))
+                      tools=make_tools(store, settings))
+
+
+def make_tools(store, settings: Settings):
+    """Everything an order needs to check and enrich leads (each part optional)."""
+    from .leadgen import Tools
+    from .lead_contacts import hunter_for
+    from .qualify import make_client
+    ch = None
+    if settings.companies_house_api_key:
+        from .ch_client import CachedCompaniesHouse, CompaniesHouseClient
+        ch = CachedCompaniesHouse(CompaniesHouseClient(settings.companies_house_api_key), store)
+    brave = None
+    if settings.brave_api_key:
+        from .web_lookup import Brave
+        brave = Brave(settings.brave_api_key)
+    return Tools(claude=make_client(settings), ch=ch, reed=make_reed(settings), brave=brave,
+                 hunter=hunter_for(store, settings))

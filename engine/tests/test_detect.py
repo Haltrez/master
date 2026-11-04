@@ -54,7 +54,7 @@ def test_long_open_from_reed_posted_date_on_day_one():
 
 def test_day_one_signal_two_live_ads():
     lead = one(compute_hot_leads([L(1, 2, 0), L(2, 1, 0)], RUN, NOW))
-    assert lead is not None and lead["posting_count_90d"] == 2 and lead["live_now"]
+    assert lead is not None and lead["posting_count_90d"] == 1 and lead["live_now"]   # one posting, two copies
 
 
 def test_same_ad_on_reed_and_adzuna_counts_once():

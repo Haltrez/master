@@ -224,7 +224,7 @@ class ApifyIndeedClient:
                             job_url=j.get("url") or j.get("jobUrl"),
                             posted_date=dt.date.fromisoformat(posted) if posted else None,
                             minimum_salary=sal.get("min") if yearly else None, maximum_salary=sal.get("max") if yearly else None,
-                            description=((j.get("description") or {}).get("text") or "")[:1500],
+                            description=((j.get("description") or {}).get("text") or "")[:3000],
                             source_says_repost=bool(j.get("isRepost")), lat=loc.get("latitude"), lng=loc.get("longitude"),
                             raw={"key": j.get("key"), "title": j.get("title"), "employer": emp.get("name"),
                                  "city": loc.get("city"), "datePublished": j.get("datePublished"),

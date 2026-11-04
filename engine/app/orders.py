@@ -14,32 +14,15 @@ import datetime as dt
 import logging
 from typing import Any, Callable
 
-from .leads import CSV_HEADERS, LEAD_COLUMNS, lead_rows
 from .pg import TerritoryTaken
 
 log = logging.getLogger("orders")
 
-# Each keyword is searched on every source, so a preset stays short (cost and time).
-# Every word of a keyword must start a word in the job title (collect.title_matches).
-INDUSTRIES: dict[str, list[str]] = {
-    "Accountancy & Finance": ["accountant", "finance manager", "credit controller", "payroll", "financial controller"],
-    "IT & Tech": ["software developer", "software engineer", "devops", "data analyst", "it support", "network engineer"],
-    "Engineering & Manufacturing": ["mechanical engineer", "electrical engineer", "maintenance engineer",
-                                    "quality engineer", "production manager", "cnc"],
-    "Construction & Property": ["site manager", "quantity surveyor", "estimator", "contracts manager", "building surveyor"],
-    "Sales & Marketing": ["sales executive", "sales manager", "sales consultant", "business development",
-                          "account manager", "marketing manager",
-                          "marketing executive"],
-    "HR": ["hr advisor", "hr manager", "hr business partner", "hr administrator"],
-    "Legal": ["solicitor", "paralegal", "legal secretary", "conveyancer"],
-    "Healthcare & Care": ["nurse", "care assistant", "support worker", "healthcare assistant", "care manager"],
-    "Logistics & Warehouse": ["warehouse operative", "hgv driver", "transport manager", "logistics", "forklift"],
-    "Office & Admin": ["office manager", "administrator", "receptionist", "customer service"],
-    "Hospitality": ["chef", "restaurant manager", "hotel manager", "bar manager"],
-    "Education": ["teacher", "teaching assistant", "lecturer"],
-}
+from . import industries as IND
+from .leadgen import ORDER_COLUMNS, Tools, candidates, pick
 
-SHEET_HEADERS = [CSV_HEADERS[c] for c in LEAD_COLUMNS] + ["Status"]
+INDUSTRIES = {k: v["search"] for k, v in IND.INDUSTRIES.items()}   # name -> job titles searched
+SHEET_HEADERS = ORDER_COLUMNS
 FREQUENCIES = ("once", "weekly")
 PACKAGES = ("sheet", "outreach")
 
@@ -48,11 +31,7 @@ def keywords_for(industry: str, custom: list[str] | None = None) -> list[str]:
     kws = [k.strip().lower() for k in (custom or []) if k and k.strip()]
     if kws:
         return list(dict.fromkeys(kws))
-    for name, preset in INDUSTRIES.items():
-        if name.lower() == industry.strip().lower():
-            return preset
-    # Free-text industry with no preset: search for it as a job title.
-    return [industry.strip().lower()]
+    return list(IND.definition(industry)["search"])
 
 
 def _now() -> dt.datetime:
@@ -79,39 +58,21 @@ def list_orders(store, status: str | None = None) -> list[dict]:
     return store.q(ORDER_SQL + " order by o.id desc")
 
 
-def _fitting(store, order: dict, leads: list[dict], claude) -> list[dict]:
-    """Only roles that belong to the order's industry (Claude Haiku, cached; keyword check without a key)."""
-    from .fit import filter_fitting
-    search = store.search_row(order["search_id"]) if order.get("search_id") else None
-    keywords = list((search or {}).get("keywords") or keywords_for(order["industry"]))
-    return filter_fitting(store, claude, order["industry"], keywords, leads)
-
-
 def ready_count(store, order: dict, strict: bool = True) -> int:
-    """Verified, on-industry leads found but not yet sent (no paid calls: known verdicts or the keyword check)."""
-    if not order.get("client_id"):
+    """Companies in this territory still to be checked/sent (an upper bound: Haiku and Companies House decide)."""
+    if not order.get("client_id") or not order.get("search_id"):
         return 0
-    leads = store.undelivered_leads(order["client_id"], 1000)
-    if strict:
-        ok = store.verified_employer_norms([l["employer_norm"] for l in leads])
-        leads = [l for l in leads if l["employer_norm"] in ok]
-    return len(_fitting(store, order, leads, None))
+    return len({l["employer_norm"] for l in candidates(store, order, _now())})
 
 
 def order_lead_rows(store, order_id: int) -> list[dict[str, Any]]:
-    """Every lead sent for an order, as sheet rows (for the CSV download / rebuilding a sheet)."""
-    o = get_order(store, order_id)
-    keys = [r["lead_key"] for r in store.q("select lead_key from deliveries where order_id = %s order by delivered_at, id",
-                                           (order_id,))]
-    if not keys:
-        return []
-    by_key = {l["lead_key"]: l for l in store.q("select * from hot_leads where lead_key = any(%s)", (keys,))}
-    search = store.search_row(o["search_id"]) if o and o.get("search_id") else None
-    return lead_rows(store, [by_key[k] for k in keys if k in by_key], dt.date.today(), search)
+    """Every row sent for an order, exactly as it went into the sheet."""
+    return [r["row"] for r in store.q("select row from deliveries where order_id = %s and row is not null "
+                                      "order by delivered_at, id", (order_id,))]
 
 
 def sheet_row(r: dict[str, Any]) -> list[Any]:
-    return [r.get(c, "") for c in LEAD_COLUMNS] + ["new"]
+    return [r.get(c, "") for c in ORDER_COLUMNS]
 
 
 # ---------------------------------------------------------------------------
@@ -202,9 +163,11 @@ def _set(store, order_id: int, **fields) -> None:
 
 
 def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, int], Any] | None = None,
-               sheets=None, strict: bool = True, now: dt.datetime | None = None, claude=None) -> dict[str, Any]:
+               sheets=None, strict: bool = True, now: dt.datetime | None = None, claude=None,
+               tools: Tools | None = None) -> dict[str, Any]:
     """Collect (when `collect` is given), then send up to the number still owed. Safe to call any time."""
     now = now or _now()
+    tools = tools or Tools(claude=claude)
     o = get_order(store, order_id)
     if o is None:
         raise ValueError(f"order {order_id} not found")
@@ -218,14 +181,10 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
             _set(store, order_id, period_start=now)
         o = get_order(store, order_id)
         owed = int(o["leads_wanted"]) - int(o["delivered_period"] if o["frequency"] == "weekly" else o["delivered_total"])
-        sent = 0
+        sent, stats = 0, {}
         if owed > 0 and o.get("client_id"):
-            leads = store.undelivered_leads(o["client_id"], 1000)
-            if strict:
-                ok = store.verified_employer_norms([l["employer_norm"] for l in leads])
-                leads = [l for l in leads if l["employer_norm"] in ok]
-            leads = _fitting(store, o, sorted(leads, key=lambda l: -l["score"])[:400], claude)[:owed]
-            rows = lead_rows(store, leads, now.date())
+            _set(store, order_id, note="Checking each ad with Claude and Companies House...")
+            rows, stats = pick(store, o, tools, owed, strict=strict, now=now)
             if sheets is not None:
                 if not o.get("sheet_id"):
                     title = f"{o['agency_name']} - {o['industry']} {o['location']} hot leads"
@@ -241,9 +200,11 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
                             log.warning("order %d: sharing failed: %s", order_id, exc)
                 sheets.append(o["sheet_id"], [sheet_row(r) for r in rows])   # before marking, so a failure retries
             if rows:
-                store.q("""insert into deliveries (client_id, lead_key, order_id)
-                           select %s, k, %s from unnest(%s::text[]) k on conflict (client_id, lead_key) do nothing""",
-                        (o["client_id"], order_id, [r["lead_key"] for r in rows]))
+                from psycopg.types.json import Jsonb
+                for r in rows:
+                    store.q("""insert into deliveries (client_id, lead_key, order_id, row) values (%s, %s, %s, %s)
+                               on conflict (client_id, lead_key) do nothing""",
+                            (o["client_id"], r["lead_key"], order_id, Jsonb({k: v for k, v in r.items() if k != "lead_key"})))
             sent = len(rows)
         o = get_order(store, order_id)
         have = int(o["delivered_period"] if o["frequency"] == "weekly" else o["delivered_total"])
@@ -256,19 +217,23 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
                 status, note = "waiting", f"{have} sent this week. Next batch from {nxt:%a %d %b}.{where}"
         else:
             status = "waiting"
-            note = (f"{have} of {o['leads_wanted']} sent. More are added every morning as new reposts are found "
-                    f"and companies are checked.{where}")
+            checked = ""
+            if stats.get("judged"):
+                checked = (f" Checked {stats['judged']} reposted ads: {stats['failed_haiku']} were the wrong kind of job"
+                           f" and {stats['failed_company_check']} failed the company check.")
+            note = (f"{have} of {o['leads_wanted']} sent.{checked} New reposts are checked every morning.{where}")
         _set(store, order_id, status=status, note=note, last_run_at=now)
-        return {"order_id": order_id, "sent": sent, "status": status, "note": note, "sheet_url": o.get("sheet_url")}
+        return {"order_id": order_id, "sent": sent, "status": status, "note": note, "sheet_url": o.get("sheet_url"),
+                "stats": stats}
     except Exception as exc:
         log.exception("order %d failed", order_id)
         _set(store, order_id, status="error", note=str(exc)[:500] or type(exc).__name__, last_run_at=now)
         return {"order_id": order_id, "sent": 0, "status": "error", "note": str(exc)}
 
 
-def top_up_all(store, settings, sheets=None, strict: bool = True, claude=None) -> list[dict]:
+def top_up_all(store, settings, sheets=None, strict: bool = True, claude=None, tools: Tools | None = None) -> list[dict]:
     """After the daily collection: send what's owed on every open order (no extra collection)."""
     out = []
     for o in store.q("select id from lead_orders where status in ('collecting', 'waiting', 'error') order by id"):
-        out.append(fill_order(store, settings, o["id"], sheets=sheets, strict=strict, claude=claude))
+        out.append(fill_order(store, settings, o["id"], sheets=sheets, strict=strict, claude=claude, tools=tools))
     return out

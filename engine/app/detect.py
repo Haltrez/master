@@ -36,6 +36,9 @@ LIVE_SLACK = dt.timedelta(hours=1)
 # (Within one run ads are seen seconds apart: that is the same ad in several places, not a repost.)
 REPOST_GAP = dt.timedelta(days=2)
 DEFAULT_LIVE_WINDOW = dt.timedelta(hours=36)
+# Ads that opened within this many days of each other are one posting (copies in several places,
+# or the same ad on several boards). A posting that opens later than this is the role advertised again.
+EVENT_GAP = dt.timedelta(days=7)
 
 
 @dataclass
@@ -89,6 +92,22 @@ def _reposted(ls: list[Listing]) -> bool:
     return False
 
 
+def posting_events(ls: list[Listing]) -> list[list[Listing]]:
+    """Group a role's ads into distinct postings: a new posting starts when an ad opens 7+ days after the
+    current posting started, or after every ad of the current posting was seen gone for 2+ days."""
+    events: list[list[Listing]] = []
+    for l in sorted(ls, key=lambda x: (x.opened(), x.first_seen_at, x.job_id)):
+        if events:
+            ev = events[-1]
+            start = min(x.opened() for x in ev)
+            ended = max(x.last_seen_at for x in ev)
+            if l.opened() - start < EVENT_GAP and not (ended + REPOST_GAP <= l.first_seen_at):
+                ev.append(l)
+                continue
+        events.append([l])
+    return events
+
+
 def compute_hot_leads(
     listings: list[Listing],
     latest_run: dict[int, dt.datetime],
@@ -109,11 +128,9 @@ def compute_hot_leads(
 
     leads: list[dict[str, Any]] = []
     for key, ls in groups.items():
-        by_source: dict[str, set[int]] = defaultdict(set)
-        for l in ls:
-            if l.first_seen_at >= cutoff:
-                by_source[l.source].add(l.job_id)
-        count = max((len(v) for v in by_source.values()), default=0)
+        recent = [l for l in ls if l.first_seen_at >= cutoff or l.opened() >= cutoff]
+        events = posting_events(recent or ls)
+        count = len(events)
         live = [l for l in ls if _is_live(l, latest_run, now)]
         live_by_source: dict[str, set[int]] = defaultdict(set)
         for l in live:
@@ -126,13 +143,14 @@ def compute_hot_leads(
         flagged = any(l.source_says_repost for l in ls)
         if flagged and count < 2:
             count = 2      # the board itself says this ad is a repost: at least two postings
-        repost = _reposted(ls) or prior > 0 or flagged
+        repost = len(events) >= 2 or _reposted(ls) or prior > 0 or flagged
         if reposts_only:
             if not (repost and count >= threshold):
                 continue
         elif not (count >= threshold or long_open or day_one):
             continue
-        latest = max(ls, key=lambda l: (l.first_seen_at, l.job_id))
+        latest = max(ls, key=lambda l: (l.opened(), l.first_seen_at, l.job_id))
+        previous = events[0][0] if len(events) >= 2 else None
         leads.append({
             "lead_key": key,
             "employer_name": latest.employer_name,
@@ -147,6 +165,9 @@ def compute_hot_leads(
             "old_ad_url": ev.get("old_url"),
             "archive_prior": prior,
             "reposted": repost,
+            "flagged_repost": flagged,
+            "posting_dates": [min(x.opened() for x in ev).date() for ev in events],
+            "previous_url": previous.url if previous else None,
             "last_seen_at": max(l.last_seen_at for l in ls),
             "live_now": bool(live),
             "long_open": long_open,
@@ -165,6 +186,7 @@ def compute_hot_leads(
         hot_keys_per_employer[lead["employer_norm"]] += 1
     for lead in leads:
         lead["score"] = (2 * (lead["posting_count_90d"] - 1) + (2 if lead["long_open"] else 0)
+                         + (2 if lead["flagged_repost"] else 0)
                          + (1 if hot_keys_per_employer[lead["employer_norm"]] >= 3 else 0)
                          + (1 if lead["live_now"] else 0))
     leads.sort(key=lambda x: (-x["score"], x["employer_norm"], x["title_norm"]))

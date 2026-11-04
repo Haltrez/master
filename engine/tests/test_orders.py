@@ -18,15 +18,22 @@ SECRET = "s"
 H = {"X-API-Key": SECRET}
 
 
-def add_leads(store, n, location="Leeds", title="Software Developer", verified=True, label=None, start=0):
-    """n hot leads tied to the search with this label (created by an order)."""
+def add_leads(store, n, location="Leeds", title="Software Developer", verified=True, label=None, start=0,
+              description="Build and maintain our web platform as part of our in-house team."):
+    """n reposted hot leads (each with its newest ad as a listing) tied to the search with this label."""
     sid = store.val("select id from searches where label = %s", (label,))
     for i in range(start, start + n):
-        key, emp = f"k{i}", f"Company {i}"
+        key, emp, job = f"k{i}", f"Company {i}", 70000 + i
+        store.q("""insert into listings (job_id, source, posted_by, employer_name, employer_norm, title, title_norm,
+                   location_name, location_norm, url, posted_date, first_seen_at, last_seen_at, raw, description)
+                   values (%s, 'adzuna', 'employer', %s, %s, %s, %s, %s, %s, %s, current_date - 2, now() - interval '2 days',
+                   now(), '{}', %s)""",
+                (job, emp, emp.lower(), title, title.lower(), location, location.lower(), f"https://example.test/{i}", description))
         store.q("""insert into hot_leads (lead_key, employer_name, employer_norm, title, location_name, posting_count_90d,
-                   first_seen_at, last_seen_at, live_now, long_open, score, latest_url, job_ids)
-                   values (%s, %s, %s, %s, %s, 3, '2026-09-01', now(), true, false, %s, %s, '{}')""",
-                (key, emp, emp.lower(), title, location, 10 + i, f"https://example.test/{i}"))
+                   first_seen_at, last_seen_at, live_now, long_open, score, latest_url, job_ids, posting_dates, previous_url)
+                   values (%s, %s, %s, %s, %s, 3, '2026-09-01', now(), true, false, %s, %s, %s, '{2026-09-01,2026-10-01,2026-11-01}',
+                   'https://example.test/old')""",
+                (key, emp, emp.lower(), title, location, 10 + i, f"https://example.test/{i}", [job]))
         store.q("insert into hot_lead_searches values (%s, %s)", (key, sid))
         store.q("insert into lead_contacts (employer_norm, company_name, ch_company_type, verified_company) "
                 "values (%s, %s, 'ltd', %s)", (emp.lower(), emp, verified))
@@ -89,7 +96,7 @@ def test_fill_sends_only_verified_up_to_the_number_and_never_twice(store):
     assert r["sent"] == 3 and r["status"] == "done"
     assert sheets.shared == ["jo@acme.test"] and len(sheets.created) == 1
     assert [row[1] for row in sheets.rows] == ["Company 3", "Company 2", "Company 1"]   # best score first
-    assert sheets.rows[0][-1] == "new" and len(sheets.rows[0]) == len(O.SHEET_HEADERS) == 15
+    assert sheets.rows[0][-1] == "new" and len(sheets.rows[0]) == len(O.SHEET_HEADERS) == 16
     got = O.get_order(store, o["id"])
     assert got["delivered_total"] == 3 and got["sheet_url"].endswith("/edit")
     # raising the number sends only the rest; unverified companies never go out
@@ -296,19 +303,26 @@ def test_assistant_without_key_says_so(store):
 
 
 class FakeHaiku:
-    """Says yes to titles containing 'sales'; records each call."""
+    """Passes ads whose title contains 'sales' unless the text says 'our client'; records each call."""
 
     def __init__(self):
         self.calls = []
         self.messages = SimpleNamespace(create=self._create)
 
     def _create(self, **kw):
+        import re
         self.calls.append(kw)
         assert kw["model"] == "claude-haiku-5-5" and kw["output_config"]["format"]["type"] == "json_schema"
-        lines = kw["messages"][0]["content"].split("\n")
-        titles = [l.split(". ", 1)[1] for l in lines if l[:1].isdigit() and ". " in l]
-        fits = [i for i, t in enumerate(titles) if "sales" in t.lower()]
-        return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps({"fits": fits}))])
+        text = kw["messages"][0]["content"]
+        verdicts = []
+        for m in re.finditer(r'<ad id="(\d+)">\nCompany: [^\n]*\nTitle: ([^\n]*)\n(.*?)</ad>', text, re.S):
+            fit = "sales" in m.group(2).lower()
+            direct = "our client" not in m.group(3).lower()
+            verdicts.append({"id": int(m.group(1)), "industry_fit": fit, "direct_employer": direct,
+                             "real_vacancy": True, "agency_would_fill": True, "role": m.group(2).title(),
+                             "reason": "sales role" if fit else "not sales"})
+        return SimpleNamespace(stop_reason="end_turn",
+                               content=[SimpleNamespace(type="text", text=json.dumps({"verdicts": verdicts}))])
 
 
 def test_only_leads_that_fit_the_industry_are_sent_and_verdicts_are_cached(store):
@@ -317,11 +331,15 @@ def test_only_leads_that_fit_the_industry_are_sent_and_verdicts_are_cached(store
     add_leads(store, 2, label=label, title="Field Sales Executive")
     add_leads(store, 3, label=label, title="Retail Optical Assistant", start=10)
     haiku = FakeHaiku()
+    add_leads(store, 1, label=label, title="Sales Executive", start=30, description="Our client, a leading firm...")
     r = O.fill_order(store, Settings(), o["id"], claude=haiku)
-    assert r["sent"] == 2 and len(haiku.calls) == 1
+    assert r["sent"] == 2 and len(haiku.calls) == 1   # 6 ads in one batch; the agency ad ("our client") is out
+    rows = O.order_lead_rows(store, o["id"])
+    assert rows[0]["Times posted"] == 3 and "Advertised 3 separate times" in rows[0]["Why it's a lead"]
+    assert rows[0]["Role"] == "Field Sales Executive" and rows[0]["Previous ad"] == "https://example.test/old"
     add_leads(store, 1, label=label, title="Retail Optical Assistant", start=20)
     O.fill_order(store, Settings(), o["id"], claude=haiku)
-    assert len(haiku.calls) == 1   # titles judged once, then cached
+    assert len(haiku.calls) == 2 and haiku.calls[1]["messages"][0]["content"].count("<ad id=") == 1   # only the new ad
 
 
 def test_without_claude_the_keyword_check_keeps_garbage_out(store):

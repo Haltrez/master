@@ -56,6 +56,7 @@ class Hooks:
     post_webhook: Callable[[str, dict], None]
     make_sheets: Callable[[PgStore, Settings], Any] | None = None     # None -> the owner's Google account
     make_claude: Callable[[Settings], Any] | None = None              # None -> anthropic.Anthropic()
+    make_tools: Callable[[PgStore, Settings], Any] | None = None      # None -> pipeline.make_tools
 
 
 def default_hooks() -> Hooks:
@@ -1017,15 +1018,15 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     def fill(order_id: int, collect: bool = True) -> dict:
         s = db()
-        return O.fill_order(s, settings, order_id, strict=strict(s), sheets=sheets_for(s), claude=fit_client(),
+        return O.fill_order(s, settings, order_id, strict=strict(s), sheets=sheets_for(s), tools=order_tools(s),
                             collect=(lambda st, se, sid: hooks.collect_one(st, se, sid, st.create_run(sid))) if collect else None)
 
-    def fit_client():
-        """Claude Haiku for the industry check (tests: hooks.make_claude; None -> keyword check)."""
-        if hooks.make_claude is not None:
-            return hooks.make_claude(settings)
-        from .fit import make_client
-        return make_client(settings)
+    def order_tools(s: PgStore):
+        """Haiku, Companies House, Reed details, Brave, Hunter for checking leads (tests: hooks.make_tools)."""
+        if hooks.make_tools is not None:
+            return hooks.make_tools(s, settings)
+        from .pipeline import make_tools
+        return make_tools(s, settings)
 
     def order_out(s: PgStore, o: dict) -> dict:
         return {**o, "ready": O.ready_count(s, o, strict(s))}
@@ -1040,7 +1041,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     @app.get("/industries", dependencies=A)
     def industries():
-        return [{"name": k, "keywords": v} for k, v in O.INDUSTRIES.items()]
+        from .industries import INDUSTRIES as DEFS
+        return [{"name": k, "keywords": v["search"], "in": v["in"], "out": v["out"]} for k, v in DEFS.items()]
 
     @app.get("/orders", dependencies=A)
     def orders_list(status: str | None = None):

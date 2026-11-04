@@ -105,6 +105,19 @@ def classify(
     return queried_as, None
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
+def plain_text(html: str | None, limit: int = 3000) -> str | None:
+    """Ad text without HTML, whitespace squeezed, cut to `limit` characters."""
+    if not html:
+        return None
+    import html as _html
+    t = _html.unescape(_TAG.sub(" ", html))
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:limit] or None
+
+
 def listing_row(job: Any, posted_by: PostedBy, source: str = "reed") -> dict[str, Any]:
     return {
         "job_id": job.job_id,
@@ -124,6 +137,7 @@ def listing_row(job: Any, posted_by: PostedBy, source: str = "reed") -> dict[str
         "expiration_date": job.expiration_date.isoformat() if job.expiration_date else None,
         "raw": job.raw,
         "source_says_repost": bool(getattr(job, "source_says_repost", False) or getattr(job, "reposted", False)),
+        "description": plain_text(getattr(job, "job_description", None)),
     }
 
 
