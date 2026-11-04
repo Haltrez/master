@@ -56,8 +56,7 @@ services:
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment:
-      CRM_DOMAIN: ${CRM_DOMAIN:?set CRM_DOMAIN in .env}
-      ENGINE_DOMAIN: ${ENGINE_DOMAIN:?set ENGINE_DOMAIN in .env}
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

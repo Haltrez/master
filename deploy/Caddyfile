@@ -1,11 +1,12 @@
-# Caddy gets and renews HTTPS certificates automatically.
-# CRM_DOMAIN and ENGINE_DOMAIN come from .env (point both DNS A records at the server).
-{$CRM_DOMAIN} {
+# DOMAIN may list several hosts, comma separated. One site for everything; Caddy gets and renews the HTTPS certificate itself.
+#   https://DOMAIN/          -> CRM
+#   https://DOMAIN/engine/*  -> engine API (Make.com uses this; X-API-Key required)
+{$DOMAIN} {
 	encode gzip
-	reverse_proxy crm:3000
-}
-
-{$ENGINE_DOMAIN} {
-	encode gzip
-	reverse_proxy engine:8000
+	handle_path /engine/* {
+		reverse_proxy engine:8000
+	}
+	handle {
+		reverse_proxy crm:3000
+	}
 }

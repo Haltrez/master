@@ -35,6 +35,7 @@ Make.com (06:00 daily, 08:00 client delivery, 07:30 Riga digest)
         ▼
 Reed API ─┐                      ┌── CRM (password login) ── you
 Adzuna ───┼─► engine (FastAPI) ◄─┘      browser never sees the engine secret
+          (https://DOMAIN/engine)    CRM at https://DOMAIN
 Companies House, Brave, Hunter ┘   │
 Employer careers pages (polite)    ▼
                                 Postgres
@@ -42,42 +43,33 @@ Employer careers pages (polite)    ▼
 
 ## Deploy on Hetzner (about 30 minutes)
 
-You need a Hetzner Cloud server (CX22 or bigger, Ubuntu 24.04) and a domain
-where you can add DNS records.
+You need any Ubuntu/Debian server (Hetzner, netcup, ...) and a hostname that
+points at it. The hostname your provider gives the server works: netcup's
+`v...luckysrv.de` name, for example.
 
-1. **DNS.** Add two A records pointing at the server's IP address:
-   `crm.yourdomain` and `api.yourdomain`.
-2. **Install Docker on the server.** SSH in as root, then:
+1. **SSH in as root and get the code.**
    ```bash
-   curl -fsSL https://get.docker.com | sh
+   apt-get update && apt-get install -y git
+   git clone -b claude/new-session-06z41u https://github.com/haltrez/master.git /opt/repost-radar
    ```
-3. **Get the code.**
+   The repo is private: when git asks for a password, paste a GitHub token
+   with read access to the repo.
+2. **Run the setup script.**
    ```bash
-   git clone <this repo> /opt/repost-radar && cd /opt/repost-radar
+   bash /opt/repost-radar/scripts/setup-server.sh
    ```
-4. **Configure it.**
-   ```bash
-   cp .env.example .env
-   nano .env
-   ```
-   Fill in:
-   - `CRM_DOMAIN` and `ENGINE_DOMAIN`
-   - `POSTGRES_PASSWORD`, `SESSION_SECRET` and `ENGINE_API_SECRET`. Make each
-     one with `openssl rand -hex 32`.
-   - `CRM_PASSWORD`: the password you'll log in with
-   - `REED_API_KEY` and `COMPANIES_HOUSE_API_KEY`, plus `ADZUNA_*`,
-     `BRAVE_API_KEY` and `HUNTER_API_KEY` if you have them
+   It does the rest:
+   - installs Docker and a firewall (SSH, HTTP and HTTPS only)
+   - generates all the secrets and your CRM password
+   - asks for your API keys (press Enter to skip any)
+   - starts everything
 
-   Keys never go in the code. They live only in this `.env` file.
-5. **Start it.**
-   ```bash
-   docker compose up -d --build
-   ```
-   The first build takes a few minutes. The database is created and migrated
-   automatically. Caddy gets HTTPS certificates on its own.
-6. **Open `https://crm.yourdomain`** and log in.
-7. **Make.com.** Build the scenarios in [`make/SCENARIOS.md`](make/SCENARIOS.md),
-   using `https://api.yourdomain` as `ENGINE_URL`.
+   At the end it prints your CRM address and password. Keys never go in the
+   code: they live only in `/opt/repost-radar/.env`, and you can edit that
+   file later and re-run the script.
+3. **Open the address it printed** and log in. The engine for Make.com is at
+   the same address plus `/engine`.
+4. **Make.com.** Build the scenarios in [`make/SCENARIOS.md`](make/SCENARIOS.md).
 
 **Updating later:**
 ```bash
@@ -101,6 +93,9 @@ This runs the daily collection at 06:00 UK from the server itself.
 **Using Supabase instead of the built-in Postgres:** set `DATABASE_URL` to
 Supabase's connection string and `SUPABASE=1` in `.env`. Everything else is
 the same.
+
+**Your own domain later:** point its DNS at the server, set `DOMAIN=` in
+`.env`, and run `docker compose up -d`.
 
 **A stronger login:** run `cd crm && npm run hash-password -- 'your password'`
 and put the result in `CRM_PASSWORD_HASH` instead of `CRM_PASSWORD`. Failed

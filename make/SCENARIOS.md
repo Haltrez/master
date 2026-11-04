@@ -8,7 +8,7 @@ need any Make.com experience. Each one takes 10 to 20 minutes.
 1. Sign in at <https://www.make.com>. In **Organization → Settings**, set the
    **time zone to Europe/London**. Scenario 3 is the one exception, set below.
 2. You need two values from the server's `.env`:
-   - `ENGINE_URL`: `https://<ENGINE_DOMAIN>`, for example `https://api.smartemploy.io`
+   - `ENGINE_URL`: `https://<DOMAIN>/engine`, for example `https://v2202608395914497498.luckysrv.de/engine`
    - `ENGINE_API_SECRET`: the long random secret
 3. In Make, create a **Data store** or a scenario variable for the secret. You
    can also paste it directly into the header field of each HTTP module. It's
