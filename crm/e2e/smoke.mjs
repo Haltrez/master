@@ -59,15 +59,7 @@ try {
   await page.goto(BASE + "/agencies");
   await page.waitForSelector("text=Aire Valley Recruitment");
   check(true, "agencies appear");
-  await page.click("button:has-text('Table')");
-  await page.selectOption("select[aria-label='Stage of Aire Valley Recruitment']", "contacted");
-  await page.waitForSelector("text=How did you contact them?");
-  await page.click("[role=dialog] button:has-text('Email')");
-  await page.waitForTimeout(500);
-  await page.reload();
-  await page.click("button:has-text('Table')");
-  check(await page.locator("select[aria-label='Stage of Aire Valley Recruitment']").inputValue() === "contacted", "agency moved to contacted via the 'how' prompt");
-
+  check(await page.locator("text=Agencies to sell to").count() === 1, "agencies to sell to are listed");
   await page.click("text=Aire Valley Recruitment");
   await page.waitForSelector("[data-testid=log-call]");
   await page.click("[data-testid=log-call]");
@@ -76,11 +68,6 @@ try {
   await page.click("button:has-text('Candidates')");
   await page.waitForSelector("text=Candidate briefs");
   check(true, "candidates tab opens");
-
-  await page.goto(BASE + "/today");
-  const today = await page.locator("[data-testid=outreach-today]").innerText();
-  check(today.trim().startsWith("2"), `Today scorecard counts the 2 actions (shows "${today.trim()}")`);
-  await page.screenshot({ path: shots + "today-desktop.png", fullPage: true });
 
   // The simple flow: a lead order from the home page.
   await page.goto(BASE + "/");
@@ -113,6 +100,18 @@ try {
   await page.click("button:has-text('Create order & find leads')");
   await page.waitForSelector("[data-testid=order] >> text=Rival Recruitment");
   check(true, "deleting an order frees its industry + region");
+  await page.waitForSelector("[data-testid=order] >> text=topping up", { timeout: 60000 });
+  await page.goto(BASE + "/leads");
+  await page.waitForSelector("text=Harlow Group");
+  await page.selectOption("select[aria-label^='Result for Harlow Group']", "meeting");
+  await page.waitForTimeout(500);
+  await page.reload();
+  check(await page.locator("select[aria-label^='Result for Harlow Group']").inputValue() === "meeting", "leads page records what happened with a lead");
+  await page.goto(BASE + "/agencies");
+  await page.waitForSelector("text=Your clients (1)");
+  check(await page.locator("text=1 meetings").count() === 1, "agency shows its orders and results");
+  check((await page.locator("[data-testid=version]").innerText()).startsWith("Version"), "version is shown");
+  await page.goto(BASE + "/");
   await page.selectOption("select[aria-label='Territory industry']", "IT & Tech");
   await page.fill("input[aria-label='Territory town']", "York");
   await page.click("button:has-text('Start collecting')");
@@ -121,7 +120,7 @@ try {
   await page.screenshot({ path: shots + "orders-desktop.png", fullPage: true });
 
   const phone = await browser.newPage({ ...playwright.devices["iPhone 13"], storageState: await page.context().storageState() });
-  for (const p of ["/", "/today", "/agencies", "/hot-leads"]) {
+  for (const p of ["/", "/leads", "/agencies", "/settings"]) {
     await phone.goto(BASE + p);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check(overflow <= 1, `no sideways page scroll on a phone: ${p}`);

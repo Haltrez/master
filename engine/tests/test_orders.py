@@ -382,3 +382,17 @@ def test_territories_api(store, api_with):
     r = c.post("/territories", headers=H, json={"industry": "Legal", "location": "Bath"})
     assert r.status_code == 201, r.text
     assert c.runs and [t["label"] for t in c.get("/territories", headers=H).json()] == ["Legal - Bath"]
+
+
+def test_sent_leads_and_agencies_overview(store, api_with):
+    o = make(store, client_email="jo@acme.test")
+    add_leads(store, 2, label="IT & Tech - Leeds")
+    O.fill_order(store, Settings(), o["id"])
+    c = api_with()
+    leads = c.get(f"/leads?order_id={o['id']}", headers=H).json()
+    assert len(leads) == 2 and leads[0]["row"]["Company"].startswith("Company") and leads[0]["agency_name"] == "Acme Recruitment"
+    c.patch(f"/deliveries/{leads[0]['id']}", headers=H, json={"outcome": "meeting"})
+    ov = c.get("/agencies-overview", headers=H).json()
+    assert ov["clients"][0]["name"] == "Acme Recruitment" and ov["clients"][0]["meetings"] == 1
+    assert ov["clients"][0]["orders"][0]["sent"] == 2 and ov["clients"][0]["email"] == "jo@acme.test"
+    assert c.get("/health", headers=H).json()["version"]

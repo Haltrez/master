@@ -309,6 +309,9 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+VERSION = "2026-11-05.2"   # shown in the CRM footer, so it's visible when an update is live
+
+
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
     settings = settings or get_settings()
     hooks = hooks or default_hooks()
@@ -357,7 +360,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
             ok = db().ping()
         except Exception as exc:
             return JSONResponse(status_code=503, content={"ok": False, "db": False, "error": type(exc).__name__})
-        return {"ok": ok, "db": ok, "time": dt.datetime.now(dt.timezone.utc)}
+        return {"ok": ok, "db": ok, "time": dt.datetime.now(dt.timezone.utc), "version": VERSION}
 
     # -- searches + runs ------------------------------------------------------------
     @app.get("/searches", dependencies=A)
@@ -1130,6 +1133,14 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                 s.finish_task(task_id, "error", error=str(exc))
         bg.add_task(work)
         return {"task_id": task_id, "status": "running"}
+
+    @app.get("/leads", dependencies=A)
+    def sent_leads_ep(order_id: int | None = None):
+        return O.sent_leads(db(), order_id)
+
+    @app.get("/agencies-overview", dependencies=A)
+    def agencies_overview_ep():
+        return O.agencies_overview(db())
 
     # -- Google -------------------------------------------------------------------------------------
     @app.get("/google/status", dependencies=A)

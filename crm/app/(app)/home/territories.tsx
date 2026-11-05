@@ -56,7 +56,7 @@ export function Territories({ industries }: { industries: any[] }) {
                   <span className="font-medium">{t.label}</span>{" "}
                   {t.owner ? <Badge tone="blue">{t.owner}</Badge> : <Badge>not sold</Badge>}
                   {!t.active && <> <Badge tone="amber">stopped</Badge></>}
-                  <p className="text-xs text-slate-500">{t.ads} {t.ads === 1 ? "ad" : "ads"} · {t.reposted_roles} reposted roles
+                  <p className="text-xs text-slate-500">{t.ads} {t.ads === 1 ? "ad" : "ads"} · {t.reposted_roles} reposted roles found (before checks)
                     {t.collecting_since && <> · since {t.collecting_since}</>}{t.last_run_at && <> · ran {ago(t.last_run_at)}</>}</p>
                 </div>
                 <div className="flex gap-1">
@@ -69,16 +69,45 @@ export function Territories({ industries }: { industries: any[] }) {
                   )}
                 </div>
               </div>
-              {p && !p.running && (p.error ? <ErrorNote error={p.error} /> : (
-                <div className="mt-1 rounded-lg bg-slate-50 p-2 text-xs dark:bg-slate-900">
-                  <b>{p.ready} verified leads ready now.</b>{" "}
-                  {p.sample?.slice(0, 5).map((s: any) => `${s.Company} (${s.Role})`).join(" · ")}
-                </div>
-              ))}
+              {p && !p.running && (p.error ? <ErrorNote error={p.error} /> : <Preview p={p} />)}
             </li>
           );
         })}
       </ul>
     </Card>
+  );
+}
+
+function Preview({ p }: { p: any }) {
+  const c = p.checked || {};
+  const [all, setAll] = useState(false);
+  const steps = [
+    [c.not_current, "not advertised in the last 10 days"], [c.outside_area, "outside the area"],
+    [c.failed_haiku, "wrong kind of job, an agency or not a real vacancy (Claude read each ad)"],
+    [c.failed_company_check, "failed the Companies House check"], [c.same_company, "extra roles at the same company"],
+    [c.not_judged, "not checked yet (Claude was busy, next run)"],
+  ].filter(([n]) => n);
+  const leads: any[] = p.leads || [];
+  return (
+    <div className="mt-2 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-900" data-testid="preview">
+      <p><b>{p.reposted_roles} reposted roles → {p.ready} verified leads ready now.</b></p>
+      {steps.length > 0 && <ul className="mt-1 list-inside list-disc text-slate-500">
+        {steps.map(([n, t]) => <li key={String(t)}>{n} {t}</li>)}</ul>}
+      {leads.length > 0 && (
+        <table className="mt-2 w-full">
+          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+            {(all ? leads : leads.slice(0, 10)).map((l, i) => (
+              <tr key={i} className="align-top">
+                <td className="py-1.5 pr-2 font-medium">{l.Company}</td>
+                <td className="pr-2">{l.Role}{l["Also hiring"] && <span className="text-slate-500"> (also {l["Also hiring"]})</span>}</td>
+                <td className="pr-2 whitespace-nowrap">{l["Times posted"]}× · {l.Location}</td>
+                <td className="text-slate-500">{l["Why it's a lead"]} {l["Ad link"] && <a href={l["Ad link"]} target="_blank" rel="noreferrer">ad</a>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {leads.length > 10 && <button className="mt-1 text-brand" onClick={() => setAll(!all)}>{all ? "Show fewer" : `Show all ${leads.length}`}</button>}
+    </div>
   );
 }

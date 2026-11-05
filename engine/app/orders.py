@@ -296,5 +296,53 @@ def preview_territory(store, search_id: int, tools: Tools, limit: int = 50) -> d
             "location": t["location"]}
     quiet = Tools(claude=tools.claude, ch=tools.ch, reed=tools.reed)   # no Brave/Hunter spend on a preview
     rows, stats = pick(store, fake, quiet, limit, strict=True)
-    return {"territory": t["label"], "ready": len(rows), "checked": stats,
+    keep = ("Company", "Role", "Also hiring", "Times posted", "Location", "Salary", "Ad link", "Why it's a lead")
+    stats["not_current"] = max(0, int(t["reposted_roles"]) - stats["candidates"])   # last ad over 10 days ago
+    return {"territory": t["label"], "reposted_roles": t["reposted_roles"], "ready": len(rows), "checked": stats,
+            "leads": [{k: r[k] for k in keep} for r in rows],
             "sample": [{k: r[k] for k in ("Company", "Role", "Times posted", "Why it's a lead")} for r in rows[:10]]}
+
+
+# ---------------------------------------------------------------------------
+# leads sent + agencies (the CRM's Leads and Agencies pages)
+# ---------------------------------------------------------------------------
+def sent_leads(store, order_id: int | None = None) -> list[dict]:
+    where, params = "d.row is not null", []
+    if order_id:
+        where += " and d.order_id = %s"; params.append(order_id)
+    return store.q(f"""select d.id, d.order_id, d.outcome, d.delivered_at, d.row, a.name as agency_name,
+                              o.industry, o.location
+                       from deliveries d join lead_orders o on o.id = d.order_id left join agencies a on a.id = o.agency_id
+                       where {where} order by d.delivered_at desc, d.id desc limit 2000""", params)
+
+
+def agencies_overview(store) -> dict:
+    clients = store.q("""
+        select a.id, a.name, a.website,
+          (select max(o.client_email) from lead_orders o where o.agency_id = a.id) as email,
+          coalesce((select json_agg(json_build_object('id', o.id, 'industry', o.industry, 'location', o.location,
+                     'status', o.status, 'leads_wanted', o.leads_wanted, 'frequency', o.frequency, 'package', o.package,
+                     'sent', (select count(*) from deliveries d where d.order_id = o.id)) order by o.id)
+                    from lead_orders o where o.agency_id = a.id), '[]') as orders,
+          (select count(*) from deliveries d join lead_orders o on o.id = d.order_id where o.agency_id = a.id) as leads_sent,
+          (select count(*) from deliveries d join lead_orders o on o.id = d.order_id
+             where o.agency_id = a.id and d.outcome = 'contacted') as contacted,
+          (select count(*) from deliveries d join lead_orders o on o.id = d.order_id
+             where o.agency_id = a.id and d.outcome = 'meeting') as meetings,
+          (select count(*) from deliveries d join lead_orders o on o.id = d.order_id
+             where o.agency_id = a.id and d.outcome = 'placement') as placements
+        from agencies a where exists (select 1 from lead_orders o where o.agency_id = a.id) order by a.name""")
+    prospects = store.q("""
+        select a.id, a.name, a.website, a.ads_count_90d as ads, a.ch_company_type, a.ch_company_status,
+          (select string_agg(distinct s.label, ', ') from agency_searches x join searches s on s.id = x.search_id
+             where x.agency_id = a.id and s.active) as territories,
+          (select c.full_name from contacts c where c.agency_id = a.id and not c.do_not_contact
+             order by c.email_verified desc, (c.source = 'companies_house') desc, c.id limit 1) as contact,
+          (select c.email from contacts c where c.agency_id = a.id and c.email_verified and not c.do_not_contact
+             order by c.id limit 1) as email
+        from agencies a
+        where not exists (select 1 from lead_orders o where o.agency_id = a.id) and a.stage <> 'do_not_contact'
+          and exists (select 1 from agency_searches x join searches s on s.id = x.search_id
+                      where x.agency_id = a.id and s.active)
+        order by a.ads_count_90d desc, a.name limit 300""")
+    return {"clients": clients, "prospects": prospects}

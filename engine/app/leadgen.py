@@ -268,6 +268,7 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
     def best(items):
         return max(items, key=lambda t: (t[0]["posting_count_90d"], t[0]["score"], t[0]["last_seen_at"]))
     ranked = sorted(good.items(), key=lambda kv: (-best(kv[1])[0]["posting_count_90d"], -best(kv[1])[0]["score"]))
+    stats["same_company"] = sum(len(items) - 1 for _, items in ranked)   # extra roles shown under "Also hiring"
     rows: list[dict] = []
     for norm, items in ranked[:owed]:
         lead, verdict, ad = best(items)
