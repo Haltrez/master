@@ -6,6 +6,8 @@ import { Badge, Button, Card, Empty, ErrorNote } from "@/components/ui";
 import { api } from "@/lib/api";
 import { ago } from "@/lib/format";
 
+export const usd = (v: any) => "$" + Number(v || 0).toFixed(2);
+
 export const TONE: Record<string, "blue" | "green" | "red" | "slate" | "amber"> = {
   queued: "slate", running: "blue", done: "green", error: "red", cancelled: "amber" };
 
@@ -45,7 +47,7 @@ export function ProjectsClient({ initial }: { initial: any[] }) {
                   <Link href={`/projects/${p.id}`} className="font-medium">{p.title}</Link>
                   <Badge tone={TONE[p.status]}>{p.status}</Badge>
                 </div>
-                <p className="truncate text-xs text-slate-500">{p.steps} steps · {ago(p.created_at)}{p.last_step?.text && <> · {p.last_step.text}</>}</p>
+                <p className="truncate text-xs text-slate-500">{p.steps} steps · {usd(p.cost_usd)} · {ago(p.created_at)}{p.last_step?.text && <> · {p.last_step.text}</>}</p>
               </li>
             ))}
           </ul>

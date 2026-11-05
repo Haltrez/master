@@ -120,3 +120,16 @@ def test_careers_pages_saying_no_agencies_are_flagged():
     assert NO_AGENCIES.search("Our CV route is not open to third-party recruiters.")
     assert NO_AGENCIES.search("Recruitment is handled by our in-house recruitment team")
     assert not NO_AGENCIES.search("We are an employment agency friendly business park")
+
+
+def test_project_cost_is_recorded_from_usage(store):
+    from app.projects import cost_of
+    usage = SimpleNamespace(input_tokens=1000, output_tokens=2000, cache_read_input_tokens=100_000, cache_creation_input_tokens=5000)
+    r1 = resp("tool_use", Block(type="tool_use", id="t1", name="submit_results", input=SUBMIT)); r1.usage = usage
+    r2 = resp("end_turn", Block(type="text", text="Done.")); r2.usage = usage
+    c, _, _ = app_with(store, [r1, r2])
+    pid = c.post("/projects", headers=H, json={"brief": BRIEF}).json()["id"]
+    p = c.get(f"/projects/{pid}", headers=H).json()
+    one = cost_of("claude-opus-5-5", 1000, 5000, 100_000, 2000)
+    assert abs(float(p["cost_usd"]) - 2 * one) < 0.0001 and p["cache_read_tokens"] == 200_000
+    assert round(one, 4) == round((1000 * 4 + 5000 * 5 + 100_000 * 0.2 + 2000 * 20) / 1e6, 4)

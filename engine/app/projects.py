@@ -18,6 +18,15 @@ from typing import Any
 log = logging.getLogger("projects")
 
 MAX_STEPS = 90
+
+# $ per million tokens: (input, output, cache read). Cache writes cost 1.25x input (5-minute cache).
+PRICES = {"claude-opus-5-5": (4.0, 20.0, 0.20), "claude-sonnet-5-5": (2.0, 10.0, 0.20), "claude-haiku-5-5": (0.10, 0.50, 0.01),
+          "claude-opus-5": (5.0, 25.0, 0.50), "claude-sonnet-5": (2.0, 10.0, 0.20)}
+
+
+def cost_of(model: str, fresh: int, write: int, read: int, out: int) -> float:
+    pin, pout, pread = PRICES.get(model, PRICES["claude-opus-5-5"])
+    return (fresh * pin + write * pin * 1.25 + read * pread + out * pout) / 1_000_000
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 RESULT_LIMIT = 12000
 
@@ -152,7 +161,7 @@ def get(store, pid: int) -> dict | None:
 
 
 def list_all(store) -> list[dict]:
-    return store.q("""select id, title, status, steps, error, created_at, finished_at, input_tokens, output_tokens,
+    return store.q("""select id, title, status, steps, error, created_at, finished_at, input_tokens, output_tokens, cost_usd,
                              (result is not null) as has_result, log -> -1 as last_step
                       from projects order by id desc limit 100""")
 
@@ -245,6 +254,25 @@ def _dump(v: Any) -> str:
     return t if len(t) <= RESULT_LIMIT else t[:RESULT_LIMIT] + '..."(cut: ask for less at once)"'
 
 
+class _Metered:
+    """Wraps the research tools' Claude client (Haiku ad checks) so their cost lands on the project too."""
+
+    def __init__(self, client, store, pid: int):
+        self._c, self._store, self._pid = client, store, pid
+        self.messages = self
+
+    def create(self, **kw):
+        r = self._c.messages.create(**kw)
+        u = getattr(r, "usage", None)
+        if u is not None:
+            fresh, out = int(u.input_tokens or 0), int(u.output_tokens or 0)
+            read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+            write = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+            self._store.q("update projects set cost_usd = cost_usd + %s where id = %s",
+                          (cost_of(kw.get("model", ""), fresh, write, read, out), self._pid))
+        return r
+
+
 def _call(client, **kw):
     """Long outputs must stream (the SDK refuses a non-streaming request that may run over 10 minutes)."""
     stream = getattr(client.beta.messages, "stream", None)
@@ -267,6 +295,8 @@ def run(store, client, model: str, research, pid: int, message: str | None = Non
     messages.append(user)
     _append(store, cid, user)
     store.q("update projects set status = 'running', error = null where id = %s", (pid,))
+    if getattr(research, "claude", None) is not None and not isinstance(research.claude, _Metered):
+        research.claude = _Metered(research.claude, store, pid)
     _log(store, pid, "Started" if first else f"Follow-up: {text[:200]}")
     submitted = False
     try:
@@ -279,9 +309,14 @@ def run(store, client, model: str, research, pid: int, message: str | None = Non
                          cache_control={"type": "ephemeral"})
             u = getattr(resp, "usage", None)
             if u is not None:
-                store.q("update projects set input_tokens = input_tokens + %s, output_tokens = output_tokens + %s where id = %s",
-                        (int((u.input_tokens or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0)
-                             + (getattr(u, "cache_creation_input_tokens", 0) or 0)), int(u.output_tokens or 0), pid))
+                fresh, out = int(u.input_tokens or 0), int(u.output_tokens or 0)
+                read = int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                write = int(getattr(u, "cache_creation_input_tokens", 0) or 0)
+                served = getattr(resp, "model", None) or model    # a fallback model bills at its own price
+                store.q("""update projects set input_tokens = input_tokens + %s, output_tokens = output_tokens + %s,
+                             cache_read_tokens = cache_read_tokens + %s, cache_write_tokens = cache_write_tokens + %s,
+                             cost_usd = cost_usd + %s where id = %s""",
+                        (fresh + read + write, out, read, write, cost_of(served, fresh, write, read, out), pid))
             msg = {"role": "assistant", "content": [_block_dict(b) for b in resp.content]}
             messages.append(msg)
             _append(store, cid, msg)

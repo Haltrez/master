@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Badge, Button, Card, ErrorNote, PageHeader } from "@/components/ui";
 import { api } from "@/lib/api";
-import { TONE } from "../projects-client";
+import { TONE, usd } from "../projects-client";
 
 const isUrl = (v: string) => /^https?:\/\//.test(v || "");
 
@@ -78,13 +78,17 @@ export function ProjectView({ initial }: { initial: any }) {
         </Card>
       )}
 
-      <Card title={`What it did (${p.steps} steps)`}>
+      <Card title={`What it did (${p.steps} steps · cost ${usd(p.cost_usd)})`}>
         <ol className="space-y-1 text-xs" data-testid="project-log">
           {[...(p.log || [])].reverse().map((l: any, i: number) => (
             <li key={i} className="flex gap-2"><span className="shrink-0 tabular-nums text-slate-400">{(l.at || "").slice(11, 16)}</span><span>{l.text}</span></li>
           ))}
         </ol>
         {running && <p className="mt-2 text-xs text-slate-500">Working… this page updates by itself.</p>}
+        <p className="mt-2 text-xs text-slate-500">Claude usage: {Number(p.output_tokens || 0).toLocaleString()} tokens written,{" "}
+          {Number(p.cache_read_tokens || 0).toLocaleString()} re-read from cache,{" "}
+          {Number((p.input_tokens || 0) - (p.cache_read_tokens || 0)).toLocaleString()} new · {usd(p.cost_usd)} in total, including
+          Claude's ad checks. Job boards, Companies House and the web archive are free.</p>
         <details className="mt-3 text-xs"><summary className="cursor-pointer text-slate-500">The brief</summary>
           <pre className="mt-2 whitespace-pre-wrap font-sans">{p.brief}</pre></details>
       </Card>
