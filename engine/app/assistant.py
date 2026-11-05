@@ -20,6 +20,10 @@ log = logging.getLogger("assistant")
 
 MAX_STEPS = 12
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# When the agent's instructions or tools change between turns (an update), Claude's earlier thinking notes no
+# longer match: drop them instead of failing. What it found and did (text, tool calls, results) is kept.
+BINDING_BETA = "thinking-binding-controls-2026-08-01"
+THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 
 SYSTEM = """You run the Repost Radar CRM for its owner (Roberts, SmartEmploy). The business sells UK \
 recruitment agencies Google Sheets of "hot leads": real hiring companies (never agencies) that posted a vacancy, \
@@ -297,7 +301,8 @@ def chat(store, client, model: str, tools: Toolbox, message: str, conversation_i
         for _ in range(MAX_STEPS):
             resp = client.beta.messages.create(
                 model=model, max_tokens=16000, system=SYSTEM, tools=TOOLS, messages=messages,
-                output_config={"effort": "medium"}, betas=[FALLBACK_BETA], fallbacks="default")
+                output_config={"effort": "medium"}, betas=[FALLBACK_BETA, BINDING_BETA], fallbacks="default",
+                thinking=THINKING)
             msg = {"role": "assistant", "content": [_block_dict(b) for b in resp.content]}
             messages.append(msg)
             _append(store, cid, msg)

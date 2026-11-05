@@ -28,6 +28,10 @@ def cost_of(model: str, fresh: int, write: int, read: int, out: int) -> float:
     pin, pout, pread = PRICES.get(model, PRICES["claude-opus-5-5"])
     return (fresh * pin + write * pin * 1.25 + read * pread + out * pout) / 1_000_000
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# When the agent's instructions or tools change between turns (an update), Claude's earlier thinking notes no
+# longer match: drop them instead of failing. What it found and did (text, tool calls, results) is kept.
+BINDING_BETA = "thinking-binding-controls-2026-08-01"
+THINKING = {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "drop_block"}}
 RESULT_LIMIT = 12000
 
 SYSTEM = """You are the research agent for SmartEmploy (owner: Roberts). SmartEmploy sells UK recruitment \
@@ -305,7 +309,8 @@ def run(store, client, model: str, research, pid: int, message: str | None = Non
                 _log(store, pid, "Cancelled")
                 return {"status": "cancelled"}
             resp = _call(client, model=model, max_tokens=32000, system=SYSTEM, tools=TOOLS, messages=messages,
-                         output_config={"effort": "high"}, betas=[FALLBACK_BETA], fallbacks="default",
+                         output_config={"effort": "high"}, betas=[FALLBACK_BETA, BINDING_BETA], fallbacks="default",
+                         thinking=THINKING,
                          cache_control={"type": "ephemeral"})
             u = getattr(resp, "usage", None)
             if u is not None:
