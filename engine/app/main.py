@@ -57,6 +57,8 @@ class Hooks:
     make_sheets: Callable[[PgStore, Settings], Any] | None = None     # None -> the owner's Google account
     make_claude: Callable[[Settings], Any] | None = None              # None -> anthropic.Anthropic()
     make_tools: Callable[[PgStore, Settings], Any] | None = None      # None -> pipeline.make_tools
+    make_research: Callable[[PgStore, Settings], Any] | None = None   # None -> research_tools.Research
+    run_in_thread: bool = True                                        # tests run projects inline
 
 
 def default_hooks() -> Hooks:
@@ -288,6 +290,15 @@ class GoogleExchangeIn(BaseModel):
     redirect_uri: str
 
 
+class ProjectIn(BaseModel):
+    brief: str
+    title: str | None = None
+
+
+class ProjectMessageIn(BaseModel):
+    message: str = ""
+
+
 class ChatIn(BaseModel):
     message: str
     conversation_id: str | None = None
@@ -309,7 +320,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.4"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.5"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1184,7 +1195,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                           start_fill=lambda oid, collect=True: bg.add_task(fill, oid, collect),
                           order_out=lambda o: order_out(s, o), google=lambda: google_status(s),
                           start_collect=lambda sid: bg.add_task(hooks.collect_one, s, settings, sid, s.create_run(sid)),
-                          tools_for=lambda: order_tools(s))
+                          tools_for=lambda: order_tools(s), start_project=lambda brief: new_project(brief))
 
     @app.post("/assistant/chat", dependencies=A)
     def assistant_chat(body: ChatIn, bg: BackgroundTasks):
@@ -1212,6 +1223,75 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                 s.finish_task(task_id, "error", error=str(exc)[:300])
         bg.add_task(work)
         return {"task_id": task_id, "conversation_id": cid, "status": "running"}
+
+    # -- project agent (research briefs) -----------------------------------------------------------------
+    from . import projects as P
+
+    def research_for(s: PgStore):
+        if hooks.make_research is not None:
+            return hooks.make_research(s, settings)
+        from .pipeline import make_reed
+        from .qualify import make_client
+        from .research_tools import Research
+        return Research(s, settings, claude=make_client(settings), reed=make_reed(settings))
+
+    def start_project(pid: int, message: str | None = None) -> None:
+        s = db()
+        client = claude()
+        work = lambda: P.run(s, client, settings.assistant_model, research_for(s), pid, message)
+        if hooks.run_in_thread:
+            import threading
+            threading.Thread(target=work, name=f"project-{pid}", daemon=True).start()
+        else:
+            work()
+
+    def new_project(brief: str, title: str | None = None) -> dict:
+        s = db()
+        claude()   # fail early (400) when the key is missing
+        try:
+            p = P.create(s, brief, title)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        start_project(p["id"])
+        return P.get(s, p["id"])
+
+    @app.post("/projects", dependencies=A, status_code=202)
+    def create_project(body: ProjectIn):
+        return new_project(body.brief, body.title)
+
+    @app.get("/projects", dependencies=A)
+    def projects_list():
+        return P.list_all(db())
+
+    @app.get("/projects/{project_id}", dependencies=A)
+    def project_ep(project_id: int):
+        return P.get(db(), project_id) or notfound("project")
+
+    @app.post("/projects/{project_id}/message", dependencies=A, status_code=202)
+    def project_message(project_id: int, body: ProjectMessageIn):
+        s = db()
+        p = P.get(s, project_id) or notfound("project")
+        if p["status"] in ("running", "queued"):
+            raise HTTPException(409, "the project is still running: wait for it, or cancel it first")
+        start_project(project_id, body.message.strip() or "Carry on where you stopped and submit the results.")
+        return P.get(s, project_id)
+
+    @app.post("/projects/{project_id}/cancel", dependencies=A)
+    def project_cancel(project_id: int):
+        s = db()
+        P.get(s, project_id) or notfound("project")
+        s.q("update projects set status = 'cancelled', finished_at = now() where id = %s and status in ('running', 'queued')",
+            (project_id,))
+        return P.get(s, project_id)
+
+    @app.get("/projects/{project_id}/result.csv", dependencies=A)
+    def project_csv(project_id: int):
+        p = P.get(db(), project_id) or notfound("project")
+        if not p.get("result"):
+            raise HTTPException(404, "no results yet")
+        name = "".join(ch if ch.isalnum() else "-" for ch in p["title"][:50]).strip("-").lower() or f"project-{project_id}"
+        return Response(content="\ufeff" + P.result_csv(p["result"]), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename={name}.csv"})
 
     @app.get("/assistant/conversations/{conversation_id}", dependencies=A)
     def assistant_history(conversation_id: str):

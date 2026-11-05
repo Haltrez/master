@@ -195,7 +195,7 @@ class FakeClaude:
 
     def _create(self, **kw):
         self.requests.append(json.loads(json.dumps(kw["messages"], default=str)))
-        assert kw["fallbacks"] == "default" and kw["output_config"] == {"effort": "medium"}
+        assert kw["fallbacks"] == "default" and kw["output_config"]["effort"] in ("medium", "high")
         assert all(t["strict"] and t["input_schema"]["additionalProperties"] is False for t in kw["tools"])
         return self.script.pop(0)
 

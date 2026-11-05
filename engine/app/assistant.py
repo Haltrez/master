@@ -42,9 +42,9 @@ watch_territory to start building history for an industry + town before it's sol
 - Deleting an order cannot be undone: ask the owner to confirm (name the agency, industry and town) first.
 - Industry: use a preset name from list_industries when one fits; otherwise pass custom keywords that are job \
 titles (each word must appear in the job title).
-- You can only do what your tools do (job boards already collected, Claude checks, Companies House, orders, \
-territories). You cannot browse websites, careers pages, LinkedIn or the web archive: when asked, say so in one line \
-and do the part your tools can (e.g. watch_territory + preview_territory for the industry and town).
+- A pasted research brief (careers pages, web archive, specific roles, a sample for a prospect agency) goes to \
+start_project straight away, with the brief exactly as pasted: tell the owner it's running and where to see it \
+(the Projects tab).
 - Replies are for a busy person on a phone: short, plain English, no markdown tables, no jargon."""
 
 
@@ -91,6 +91,11 @@ TOOLS: list[dict[str, Any]] = [
      "description": "How many leads in a territory would pass every check today (Claude reads each ad, Companies "
                     "House), with a sample. Sends nothing. Takes up to a minute. Use before pitching an agency.",
      "input_schema": _obj({"search_id": I}, ["search_id"])},
+    {"name": "start_project", "strict": True,
+     "description": "Hand a research brief to the project agent (careers pages, job boards, web archive, Companies "
+                    "House, link checks; returns a sheet, email and note in 10-30 minutes). Use it whenever the owner "
+                    "pastes a brief like 'build a hot-lead list for this prospect agency'. Pass the brief exactly as given.",
+     "input_schema": _obj({"brief": S}, ["brief"])},
     {"name": "delete_order", "strict": True,
      "description": "Delete an order and its sent-lead records, freeing its industry + region for another agency. "
                     "Only after the owner has clearly confirmed deleting that specific order.",
@@ -131,6 +136,7 @@ class Toolbox:
     order_out: Callable[[dict], dict]
     google: Callable[[], dict]
     start_collect: Callable[[int], Any] | None = None
+    start_project: Callable[[str], dict] | None = None
     tools_for: Callable[[], Any] | None = None
 
     def _order_brief(self, o: dict) -> dict:
@@ -188,6 +194,11 @@ class Toolbox:
             return O.territories(s)
         if name == "preview_territory":
             return O.preview_territory(s, a["search_id"], self.tools_for())
+        if name == "start_project":
+            if not self.start_project:
+                return {"error": "projects aren't available here"}
+            p = self.start_project(a["brief"])
+            return {"project_id": p["id"], "link": f"/projects/{p['id']}", "note": "running in the background (10-30 minutes)"}
         if name == "delete_order":
             return {"deleted": O.delete_order(s, a["order_id"])}
         if name == "list_industries":

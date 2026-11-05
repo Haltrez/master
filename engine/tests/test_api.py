@@ -96,7 +96,7 @@ def test_every_endpoint_rejects_requests_without_the_secret(api):
         path = route.path
         for p in ("{search_id}", "{run_id}", "{task_id}", "{agency_id}", "{contact_id}", "{template_id}",
                   "{client_id}", "{delivery_id}", "{brief_id}", "{employer_id}", "{family_id}", "{lead_key}",
-                  "{order_id}", "{conversation_id}"):
+                  "{order_id}", "{conversation_id}", "{project_id}"):
             path = path.replace(p, "1")
         for m in methods:
             for headers in ({}, {"X-API-Key": "wrong"}):

@@ -117,10 +117,16 @@ try {
   await page.click("button:has-text('Start collecting')");
   await page.waitForSelector("[data-testid=territory] >> text=IT & Tech - York");
   check(true, "a territory can be collected before it's sold");
+  await page.goto(BASE + "/projects");
+  await page.fill("textarea[aria-label='Project brief']", "TASK: Build a hot-lead list for a prospect agency, M&E in Manchester.");
+  await page.click("button:has-text('Start project')");
+  await page.waitForSelector("text=ANTHROPIC_API_KEY");
+  check(true, "projects page explains it needs the Claude key");
+  await page.goto(BASE + "/");
   await page.screenshot({ path: shots + "orders-desktop.png", fullPage: true });
 
   const phone = await browser.newPage({ ...playwright.devices["iPhone 13"], storageState: await page.context().storageState() });
-  for (const p of ["/", "/leads", "/agencies", "/settings"]) {
+  for (const p of ["/", "/projects", "/leads", "/agencies", "/settings"]) {
     await phone.goto(BASE + p);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check(overflow <= 1, `no sideways page scroll on a phone: ${p}`);
