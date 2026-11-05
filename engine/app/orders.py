@@ -34,6 +34,12 @@ def keywords_for(industry: str, custom: list[str] | None = None) -> list[str]:
     return list(IND.definition(industry)["search"])
 
 
+def canonical_industry(industry: str) -> str:
+    """"Sales" -> "Sales & Marketing", "M&E" -> "Building Services (M&E)"; anything else as typed."""
+    d = IND.get(industry or "")
+    return d["name"] if d else " ".join((industry or "").split())
+
+
 def _now() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -81,7 +87,7 @@ def sheet_row(r: dict[str, Any]) -> list[Any]:
 def create_order(store, *, agency_name: str, industry: str, location: str, leads_wanted: int,
                  frequency: str = "once", package: str = "sheet", client_email: str | None = None,
                  keywords: list[str] | None = None, radius_miles: int = 20) -> dict:
-    agency_name, industry, location = agency_name.strip(), industry.strip(), location.strip()
+    agency_name, industry, location = agency_name.strip(), canonical_industry(industry), location.strip()
     if not (agency_name and industry and location):
         raise ValueError("agency, industry and location are all needed")
     if frequency not in FREQUENCIES:
@@ -246,7 +252,7 @@ def watch_territory(store, industry: str, location: str, radius_miles: int = 20,
                     keywords: list[str] | None = None) -> dict:
     """Start collecting an industry + town every morning before any agency buys it, so reposts are
     already visible on the day an order comes in (an order for it reuses the same history)."""
-    industry, location = industry.strip(), location.strip()
+    industry, location = canonical_industry(industry), location.strip()
     if not (industry and location):
         raise ValueError("industry and location are both needed")
     label = f"{industry} - {location}"

@@ -57,6 +57,17 @@ INDUSTRIES: dict[str, dict] = {
               "facilities and property managers, skilled trades supervisors.",
         "out": "Estate agency sales, letting negotiators, cleaners, general labourers via agencies, IT project managers.",
     },
+    "Building Services (M&E)": {
+        "search": ["electrical engineer", "mechanical engineer", "building services", "hvac engineer",
+                   "maintenance engineer", "electrician", "m&e"],
+        "in": "Mechanical and electrical (M&E) building services jobs: building services/M&E engineers, design "
+              "engineers and estimators, M&E project/contracts/site managers, HVAC, air conditioning, refrigeration, "
+              "plumbing and heating engineers, commercial electricians and electrical engineers, fire and security "
+              "systems engineers, BMS/controls engineers, multi-skilled and maintenance engineers in facilities "
+              "management, commissioning engineers.",
+        "out": "Domestic appliance call-out repairs, automotive mechanics, factory production/manufacturing "
+               "engineers, software engineers, sales roles at M&E firms, cleaners and general labourers.",
+    },
     "HR": {
         "search": ["hr advisor", "hr manager", "hr business partner", "hr administrator", "learning and development"],
         "in": "HR advisors/officers/administrators/managers/business partners/directors, people partners, L&D, "
@@ -104,11 +115,36 @@ INDUSTRIES: dict[str, dict] = {
 }
 
 
+# What people type -> the preset it means.
+ALIASES = {
+    "sales": "Sales & Marketing", "marketing": "Sales & Marketing", "business development": "Sales & Marketing",
+    "accountancy": "Accountancy & Finance", "accounting": "Accountancy & Finance", "accounts": "Accountancy & Finance",
+    "finance": "Accountancy & Finance", "payroll": "Accountancy & Finance",
+    "it": "IT & Tech", "tech": "IT & Tech", "technology": "IT & Tech", "software": "IT & Tech", "digital": "IT & Tech",
+    "engineering": "Engineering & Manufacturing", "manufacturing": "Engineering & Manufacturing",
+    "m&e": "Building Services (M&E)", "m and e": "Building Services (M&E)", "m & e": "Building Services (M&E)",
+    "building services": "Building Services (M&E)", "mechanical and electrical": "Building Services (M&E)",
+    "mechanical & electrical": "Building Services (M&E)", "hvac": "Building Services (M&E)",
+    "construction": "Construction & Property", "property": "Construction & Property",
+    "human resources": "HR", "people": "HR", "law": "Legal",
+    "healthcare": "Healthcare & Care", "care": "Healthcare & Care", "health": "Healthcare & Care",
+    "nursing": "Healthcare & Care", "social care": "Healthcare & Care",
+    "logistics": "Logistics & Warehouse", "warehouse": "Logistics & Warehouse", "driving": "Logistics & Warehouse",
+    "supply chain": "Logistics & Warehouse", "transport": "Logistics & Warehouse",
+    "admin": "Office & Admin", "office": "Office & Admin", "office support": "Office & Admin",
+    "hospitality": "Hospitality", "catering": "Hospitality", "chefs": "Hospitality",
+    "teaching": "Education", "schools": "Education",
+}
+
+
 def get(name: str) -> dict | None:
+    """A preset by its name, or by what people commonly type for it ("Sales", "IT", "M&E")."""
+    key = " ".join((name or "").strip().lower().split())
     for k, v in INDUSTRIES.items():
-        if k.lower() == (name or "").strip().lower():
+        if k.lower() == key:
             return {"name": k, **v}
-    return None
+    target = ALIASES.get(key) or ALIASES.get(key.rstrip("s"))
+    return {"name": target, **INDUSTRIES[target]} if target else None
 
 
 def definition(name: str, custom_keywords: list[str] | None = None) -> dict:

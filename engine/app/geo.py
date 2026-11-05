@@ -115,3 +115,26 @@ class Geocoder:
         self._cache.cache_set(key, place.__dict__ if place else {})
         log.info("geocode '%s' -> %s", text, f"{place.name} ({place.lat:.3f},{place.lng:.3f})" if place else "not found")
         return place
+
+
+# A region isn't a place job boards can search: search from its main city with a wide radius.
+REGIONS: dict[str, tuple[str, int]] = {
+    "north west": ("Manchester", 40), "north east": ("Newcastle upon Tyne", 35), "yorkshire": ("Leeds", 35),
+    "yorkshire and the humber": ("Leeds", 40), "west yorkshire": ("Leeds", 20), "south yorkshire": ("Sheffield", 20),
+    "east midlands": ("Nottingham", 35), "west midlands": ("Birmingham", 30), "midlands": ("Birmingham", 45),
+    "south west": ("Bristol", 45), "south east": ("Reading", 45), "east of england": ("Cambridge", 40),
+    "east anglia": ("Norwich", 40), "home counties": ("Watford", 35), "greater london": ("London", 20),
+    "greater manchester": ("Manchester", 20), "merseyside": ("Liverpool", 15), "scotland": ("Glasgow", 45),
+    "central belt": ("Glasgow", 45), "wales": ("Cardiff", 40), "south wales": ("Cardiff", 30),
+    "northern ireland": ("Belfast", 40), "thames valley": ("Reading", 25), "north": ("Leeds", 60),
+}
+
+
+def search_area(location: str | None, radius_miles: int | float | None) -> tuple[str, int]:
+    """(place to search, radius): a region becomes its main city and a radius that covers it."""
+    key = " ".join((location or "").lower().replace("the ", "").split())
+    hub = REGIONS.get(key) or REGIONS.get(key.replace(" region", ""))
+    radius = int(radius_miles or 20)
+    if hub:
+        return hub[0], max(radius, hub[1])
+    return (location or "").strip(), radius

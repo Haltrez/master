@@ -55,11 +55,19 @@ export function Territories({ industries }: { industries: any[] }) {
                 <div className="min-w-0">
                   <span className="font-medium">{t.label}</span>{" "}
                   {t.owner ? <Badge tone="blue">{t.owner}</Badge> : <Badge>not sold</Badge>}
-                  <p className="text-xs text-slate-500">{t.ads} ads · {t.reposted_roles} reposted roles
+                  {!t.active && <> <Badge tone="amber">stopped</Badge></>}
+                  <p className="text-xs text-slate-500">{t.ads} {t.ads === 1 ? "ad" : "ads"} · {t.reposted_roles} reposted roles
                     {t.collecting_since && <> · since {t.collecting_since}</>}{t.last_run_at && <> · ran {ago(t.last_run_at)}</>}</p>
                 </div>
-                <Button size="sm" variant="ghost" disabled={p?.running} onClick={() => check(t.search_id)}>
-                  {p?.running ? "Checking…" : "Check ready leads"}</Button>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="ghost" disabled={p?.running} onClick={() => check(t.search_id)}>
+                    {p?.running ? "Checking…" : "Check ready leads"}</Button>
+                  {!t.owner && (
+                    <Button size="sm" variant="ghost" className="text-slate-500"
+                      onClick={async () => { await api(`/searches/${t.search_id}`, { method: "PATCH", body: { active: !t.active } }); refresh(); }}>
+                      {t.active ? "Stop" : "Restart"}</Button>
+                  )}
+                </div>
               </div>
               {p && !p.running && (p.error ? <ErrorNote error={p.error} /> : (
                 <div className="mt-1 rounded-lg bg-slate-50 p-2 text-xs dark:bg-slate-900">

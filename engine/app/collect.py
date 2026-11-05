@@ -156,6 +156,8 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
     if search is None:
         raise ValueError(f"search {search_id} not found")
 
+    from .geo import search_area
+    area_town, area_radius = search_area(search.location, search.radius_miles)   # "North West" -> Manchester, 40mi
     run_id = run_id or repo.create_run(search_id)
     result = RunResult(run_id=run_id, search_id=search_id, status="running")
     budget = CallBudget(settings.reed_max_calls_per_run)
@@ -225,7 +227,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
             def do_reed():
                 for keyword in search.keywords:
                     for queried_as in ("employer", "agency"):
-                        pages = reed.iter_search_pages(keyword, search.location, search.radius_miles,
+                        pages = reed.iter_search_pages(keyword, area_town, area_radius,
                                                        search.min_salary, queried_as, budget=budget)  # type: ignore[arg-type]
                         for n, page in enumerate(pages):
                             store_page(page, queried_as, "reed", reed_known)  # type: ignore[arg-type]
@@ -238,7 +240,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
                 known = known_agencies()
                 flag, seen_before = backfill_flag("adzuna")
                 for keyword in search.keywords:
-                    for page in adzuna.iter_search_pages(keyword, search.location, search.radius_miles,
+                    for page in adzuna.iter_search_pages(keyword, area_town, area_radius,
                                                          search.min_salary, budget=adz_budget,
                                                          max_days_old=3 if seen_before else 90):
                         store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", "adzuna", known)
@@ -255,11 +257,11 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
                 if geocoder is None and has_cache:
                     from .geo import Geocoder
                     geocoder = Geocoder(repo)
-                place = geocoder.geocode(search.location) if geocoder else None
+                place = geocoder.geocode(area_town) if geocoder else None
                 center = (place.lat, place.lng) if place else None
                 for page in theirstack.iter_search_pages(list(search.keywords), max_age_days=days,
                                                          max_jobs=settings.theirstack_max_jobs_per_run):
-                    near = [j for j in page if _near(j, center, search.radius_miles * 1.2, search.location)]
+                    near = [j for j in page if _near(j, center, area_radius * 1.2, area_town)]
                     result.theirstack_jobs += len(page)
                     store_page(near, "employer", "theirstack", known)
                 mark_backfilled(flag)
@@ -270,7 +272,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
                 known = known_agencies()
                 flag, seen_before = backfill_flag(src.name)
                 for keyword in search.keywords:
-                    for page in src.pages(keyword, search.location, search.radius_miles, not seen_before):
+                    for page in src.pages(keyword, area_town, area_radius, not seen_before):
                         store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", src.name, known)
                 mark_backfilled(flag)
             run_source(src.name, do_extra)

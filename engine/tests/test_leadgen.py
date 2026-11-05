@@ -106,3 +106,15 @@ def test_a_vetoed_company_stays_out_on_later_runs(store):
     add_leads(store, 1, label=label, title="Sales Manager", start=1)
     store.q("update hot_leads set employer_name = 'Company 0', employer_norm = 'company 0' where lead_key = 'k1'")
     assert pick(store, order, Tools(claude=FakeHaiku()), 10)[0] == []
+
+
+def test_typed_industries_use_the_preset_definition_and_regions_search_a_hub_city(store):
+    from app import industries as IND
+    from app.geo import search_area
+    assert IND.get("Sales")["name"] == "Sales & Marketing" and "showroom" in IND.get("sales")["out"]
+    assert IND.get("M&E")["name"] == "Building Services (M&E)" and IND.get("IT")["name"] == "IT & Tech"
+    assert IND.get("Dental") is None
+    assert search_area("North West", 20) == ("Manchester", 40) and search_area("Leeds", 15) == ("Leeds", 15)
+    o = O.create_order(store, agency_name="Acme", industry="sales", location="Leeds", leads_wanted=5)
+    assert o["industry"] == "Sales & Marketing"
+    assert O.watch_territory(store, "Sales & Marketing", "Leeds")["search_id"] == o["search_id"]   # same territory

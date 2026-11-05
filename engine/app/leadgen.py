@@ -165,10 +165,12 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
     industry = IND.definition(order["industry"], list(search.get("keywords") or []))
     stats = {"candidates": 0, "outside_area": 0, "judged": 0, "not_judged": 0, "failed_haiku": 0,
              "failed_company_check": 0}
+    from .geo import search_area
+    town, radius = search_area(search.get("location") or order.get("location"),
+                               search.get("radius_miles") or order.get("radius_miles") or 20)
     center = None
-    radius = float(search.get("radius_miles") or order.get("radius_miles") or 20)
     if tools.geocoder is not None:
-        p = tools.geocoder.geocode(search.get("location") or order.get("location"))
+        p = tools.geocoder.geocode(town)
         center = (p.lat, p.lng) if p else None
 
     def in_area(ad: dict) -> bool:
