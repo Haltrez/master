@@ -124,7 +124,7 @@ try {
   await page.waitForSelector("[data-testid=territory] >> text=IT & Tech - York");
   check(true, "a territory can be collected before it's sold");
   await page.goto(BASE + "/outreach");
-  await page.waitForSelector("text=E2E main");
+  await page.waitForSelector("text=E2E founders");
   await page.waitForSelector("[data-testid=outreach-stats] >> text=40 / 40");
   check(true, "outreach page shows Smartlead campaigns and stats");
   await page.click("button:has-text('Pause')");
@@ -135,7 +135,7 @@ try {
   const html = await page.content();
   check(!html.includes("e2e-smartlead-key-never-in-browser"), "the Smartlead API key never reaches the browser");
   await page.goto(BASE + "/settings/outreach");
-  await page.selectOption("#main_campaign_id", "11");
+  await page.selectOption("#leaders_campaign_id", "11");
   await page.click("button:has-text('Save')");
   await page.waitForSelector("text=Saved ✓");
   await page.click("button:has-text('Test connection')");

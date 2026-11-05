@@ -10,6 +10,8 @@ const pct = (v: number) => `${((v || 0) * 100).toFixed(1)}%`;
 const CATS = [["interested", "Interested"], ["not_now", "Not now"], ["not_interested", "Not interested"],
   ["unsubscribe", "Unsubscribe"], ["out_of_office", "Out of office"], ["wrong_person", "Wrong person"]] as const;
 
+const ROLE: Record<string, string> = { leaders: "Founders & managers", sales: "Sales people" };
+
 export function OutreachClient({ settings }: { settings: any }) {
   return (
     <div className="space-y-4">
@@ -122,17 +124,17 @@ function Queue({ settings }: { settings: any }) {
                     <td className="pr-2 font-medium">{r.agency_name}
                       <div>{r.status === "pushed" ? <Badge tone="green">pushed</Badge> : blocked ? <Badge tone="red">blocked</Badge>
                         : r.status === "failed" ? <Badge tone="red">failed</Badge> : null}</div></td>
-                    <td className="pr-2">{r.fields._contact_name}<div className="text-slate-500">{r.fields._email}</div></td>
+                    <td className="pr-2">{r.fields._contact_name}{r.fields._title && <span className="text-slate-500"> · {r.fields._title}</span>}<div className="text-slate-500">{r.fields._email}</div></td>
                     <td className="pr-2">{r.fields.niche}<div className="text-slate-500">{r.fields.city}</div></td>
                     <td className="pr-2">{L(r, 1)}</td><td className="pr-2">{L(r, 2)}</td>
-                    <td className="pr-2">{r.campaign_role}</td>
+                    <td className="pr-2"><Badge tone={r.campaign_role === "leaders" ? "blue" : "amber"}>{ROLE[r.campaign_role] || r.campaign_role}</Badge></td>
                     <td className="max-w-[14rem] pr-2 text-amber-700 dark:text-amber-400">{(r.warnings || []).join("; ")}
                       {(res?.error || r.error) && <div className="text-red-600">{res?.error || r.error}</div>}</td>
                     <td onClick={(e) => e.stopPropagation()} className="whitespace-nowrap">
                       {(r.status === "built" || r.status === "failed") && <>
                         <button className="mr-2 text-brand" onClick={() => act(r.id, "swap", 1)}>Swap lead</button>
-                        <button className="mr-2 text-brand" onClick={() => act(r.id, r.campaign_role === "main" ? "fallback" : "main")}>
-                          {r.campaign_role === "main" ? "To fallback" : "To main"}</button></>}
+                        <button className="mr-2 text-brand" onClick={() => act(r.id, r.campaign_role === "leaders" ? "sales" : "leaders")}>
+                          {r.campaign_role === "leaders" ? "To sales" : "To founders"}</button></>}
                       {r.status !== "pushed" && <button className="text-red-600" onClick={() => act(r.id, "remove")}>Remove</button>}
                     </td>
                   </tr>
@@ -204,7 +206,7 @@ function Campaigns() {
     try { await api(`/outreach/campaigns/${id}/${what}`, { method: "POST" }); await load(); } catch (e: any) { setErr(e.message); }
   }
   return (
-    <Card title="Campaigns" action={<Link href="/settings/outreach" className="text-sm">Set main / fallback</Link>}>
+    <Card title="Campaigns" action={<Link href="/settings/outreach" className="text-sm">Choose campaigns</Link>}>
       <ErrorNote error={err} />
       {!data ? <p className="text-sm text-slate-500">Loading…</p> : !data.length ? <Empty>No campaigns in Smartlead yet.</Empty> : (
         <div className="overflow-x-auto"><table className="w-full text-sm">
@@ -213,7 +215,7 @@ function Campaigns() {
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {data.map((c) => (
               <tr key={c.id}>
-                <td className="py-1.5">{c.name} {c.role && <Badge tone={c.role === "main" ? "blue" : "amber"}>{c.role.toUpperCase()}</Badge>}</td>
+                <td className="py-1.5">{c.name} {c.role && <Badge tone={c.role === "leaders" ? "blue" : "amber"}>{ROLE[c.role]}</Badge>}</td>
                 <td><Badge tone={c.status === "ACTIVE" ? "green" : "slate"}>{c.status}</Badge></td>
                 <td className="tabular-nums">{c.inboxes ?? "?"}</td><td className="tabular-nums">{c.daily_limit ?? "?"}</td>
                 <td className="tabular-nums">{c.sent_30d}</td><td className="tabular-nums">{c.replies_30d}</td>

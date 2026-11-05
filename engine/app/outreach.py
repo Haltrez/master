@@ -1,7 +1,9 @@
 """Cold email to recruitment agencies through Smartlead: the daily queue (the feeder), push, replies, health.
 
-Feeder: agencies we haven't contacted, each with a verified director email and 1-2 of their own hot leads
-(company, role, times posted, since) as custom fields. A hot lead is pitched to one agency per city per day
+Feeder: agencies we haven't contacted, each with 1-2 of their own hot leads (company, role, times posted, since)
+as custom fields. Two campaigns by who reads the email: "leaders" (founders, owners, directors, CEOs, managers)
+and "sales" (recruitment consultants, business development, account managers). An agency can have one row in
+each: the same leads go to both people, and a reply from either pauses the other in Smartlead. A hot lead is pitched to one agency per city per day
 (lead_assignments). Rows that can't go out are kept, marked blocked, with the reason, and are never pushed.
 """
 
@@ -23,7 +25,11 @@ from .templates import month_name, niche_and_city
 log = logging.getLogger("outreach")
 UK = ZoneInfo("Europe/London")
 
-S_MAIN, S_FALLBACK = "outreach_main_campaign_id", "outreach_fallback_campaign_id"
+S_LEADERS, S_SALES = "outreach_leaders_campaign_id", "outreach_sales_campaign_id"
+S_OLD_MAIN = "outreach_main_campaign_id"     # before the leaders/sales split: read as the leaders campaign
+ROLES = ("leaders", "sales")
+ROLE_LABEL = {"leaders": "Founders & managers", "sales": "Sales people"}
+LEAD_VARS = ("employer", "role", "count", "since")
 S_LIMIT, S_AUTO, S_WINDOW = "outreach_daily_push_limit", "outreach_auto_push", "outreach_send_window"
 BOUNCE_PAUSE = 0.03          # auto-pause above 3% bounces ...
 BOUNCE_WINDOW = 200          # ... in the last 200 sends
@@ -48,7 +54,34 @@ def campaign_ids(store) -> dict[str, int | None]:
             return int(v) if v not in (None, "") else None
         except (TypeError, ValueError):
             return None
-    return {"main": num(setting(store, S_MAIN)), "fallback": num(setting(store, S_FALLBACK))}
+    return {"leaders": num(setting(store, S_LEADERS)) or num(setting(store, S_OLD_MAIN)),
+            "sales": num(setting(store, S_SALES))}
+
+
+SALES_TITLES = re.compile(r"recruit|consultant|business develop|\bbdm?\b|\bbde\b|account|sales|talent acquisition|"
+                          r"resourcer|placement|client (partner|executive)|\bexecutive\b", re.I)
+TOP_TITLES = re.compile(r"founder|owner|\bceo\b|chief|\bmd\b|managing|^partner$|(founding|equity|senior) partner|president|proprietor|chair", re.I)
+MANAGER_TITLES = re.compile(r"manager|director|\bhead\b|\blead\b|principal|\bboss\b", re.I)
+SALES_MANAGER_JOBS = re.compile(r"account (manager|director)|business development (manager|director)|\bbdm\b", re.I)
+
+
+def audience(title: str | None) -> str:
+    """Which campaign a person belongs to, from their job title.
+    leaders: founders, owners, CEOs, MDs, directors, managers, heads of ('Sales Manager' runs a team: leader).
+    sales:   recruitment consultants, recruiters, resourcers, account managers, business development.
+    No title counts as a leader (a Companies House officer is 'Director'). Anyone else (an office administrator,
+    a marketing assistant) is 'other' and isn't emailed."""
+    t = (title or "").strip()
+    if not t or TOP_TITLES.search(t):
+        return "leaders"
+    if SALES_MANAGER_JOBS.search(t):
+        return "sales"            # 'Account Manager' / 'BDM' sell; they don't manage people
+    if MANAGER_TITLES.search(t):
+        return "leaders"
+    return "sales" if SALES_TITLES.search(t) else "other"
+    if SALES_TITLES.search(t):
+        return "sales"
+    return "leaders"
 
 
 # ---------------------------------------------------------------------------
@@ -116,10 +149,16 @@ def preview(store, sl, row: dict) -> dict:
 # ---------------------------------------------------------------------------
 # the feeder
 # ---------------------------------------------------------------------------
-def _contact(store, agency_id: int) -> dict | None:
+def _contacts(store, agency_id: int) -> dict[str, dict]:
+    """The best person for each campaign at this agency: verified email first, then the most senior title."""
     cs = [c for c in store.contacts(agency_id) if c.get("email") and not c["do_not_contact"]]
-    cs.sort(key=lambda c: (not c.get("email_verified"), (c.get("role") or "").lower() != "director", c["id"]))
-    return cs[0] if cs else None
+    cs.sort(key=lambda c: (not c.get("email_verified"), not (TOP_TITLES.search(c.get("role") or "") or (c.get("role") or "Director") == "Director"), c["id"]))
+    out: dict[str, dict] = {}
+    for c in cs:
+        role = audience(c.get("role"))
+        if role in ROLES:
+            out.setdefault(role, c)
+    return out
 
 
 def _leads_for(store, search_id: int, city: str, today: dt.date, taken: set[str], n: int = 2) -> list[dict]:
@@ -166,7 +205,7 @@ def build_queue(store, settings, sl=None, *, limit: int | None = None, today: dt
     limit = int(limit or setting(store, S_LIMIT, 50))
     store.q("delete from outreach_queue where date = %s and status in ('built', 'blocked', 'approved') and not is_test", (today,))
     cids = campaign_ids(store)
-    needed = {r: variables_in(sequence(store, sl, cids[r])) for r in ("main", "fallback")}
+    needed = {r: variables_in(sequence(store, sl, cids[r])) for r in ROLES}
     sender = str(setting(store, "sender_name", "Roberts"))
     suppressed = store.suppressed_hashes()
     pushed = {r["email"] for r in store.q("""select lower(fields->>'_email') as email from outreach_queue
@@ -180,58 +219,63 @@ def build_queue(store, settings, sl=None, *, limit: int | None = None, today: dt
     for ag in agencies:
         if good >= limit:
             break
-        c = _contact(store, ag["id"])
-        if c is None:
+        people = _contacts(store, ag["id"])
+        if not people:
             continue                     # nobody to email: not a row at all
         sids = store.agency_search_ids(ag["id"])
         search = store.search_row(sids[0]) if sids else None
         niche, city = niche_and_city(search)
         taken = taken_today.setdefault(city.lower(), set())
         leads = _leads_for(store, search["id"], city, today, taken) if search else []
-        role = "main" if len(leads) >= 2 else "fallback"
-        first, *rest = (c.get("full_name") or "").split() or [""]
-        fields = {"first_name": c.get("first_name") or first or "", "last_name": " ".join(rest[-1:]) if rest else "",
-                  "company_name": ag["name"], "agency": ag["name"], "niche": niche, "city": city, "sender_name": sender,
-                  "_email": c["email"], "_contact_name": c.get("full_name"), **_lead_fields(leads)}
-        blocks, warns = [], []
-        email = (c["email"] or "").strip().lower()
-        if not c.get("email_verified"):
-            blocks.append("email not verified")
-        if c.get("do_not_contact") or ag["stage"] == "do_not_contact":
-            blocks.append("do not contact")
-        if email_hash(email) in suppressed:
-            blocks.append("on the suppression list")
-        if not email_allowed(ag):
-            blocks.append("not a confirmed Ltd/LLP/PLC")
-        if not leads:
-            blocks.append("no unused hot lead in this city today")
-        elif len(leads) == 1:
-            warns.append("only 1 hot lead: goes to the fallback campaign")
-        if email in pushed:
-            blocks.append("already pushed to Smartlead")
-        need = needed[role] or {"first_name", "agency", "niche", "city", "lead1_employer", "lead1_role", "lead1_count",
-                                "lead1_since"} | ({"lead2_employer", "lead2_role", "lead2_count", "lead2_since"}
-                                                  if role == "main" else set())
-        empty = sorted(v for v in need if str({**fields, "email": email}.get(v, "") or "").strip() == "")
-        if empty:
-            blocks.append("empty variables: " + ", ".join(empty))
-        if not blocks:
-            try:
-                if _in_smartlead(sl, email):
-                    blocks.append("already in a Smartlead campaign")
-            except Exception as exc:
-                warns.append(f"couldn't check Smartlead for this email: {exc}"[:200])
-        if blocks and blocked >= 30:
-            continue
-        status = "blocked" if blocks else "built"
-        if not blocks:
-            taken.update(fields["_lead_keys"])
-            good += 1
-        else:
-            blocked += 1
-        store.q("""insert into outreach_queue (date, agency_id, contact_id, campaign_role, fields, warnings, status)
-                   values (%s, %s, %s, %s, %s, %s, %s)""",
-                (today, ag["id"], c["id"], role, Jsonb(fields), Jsonb(blocks + warns), status))
+        for role in ROLES:
+            c = people.get(role)
+            if c is None or good >= limit:
+                continue
+            first, *rest = (c.get("full_name") or "").split() or [""]
+            fields = {"first_name": c.get("first_name") or first or "", "last_name": " ".join(rest[-1:]) if rest else "",
+                      "company_name": ag["name"], "agency": ag["name"], "niche": niche, "city": city, "sender_name": sender,
+                      "_email": c["email"], "_contact_name": c.get("full_name"), "_title": c.get("role") or "",
+                      **_lead_fields(leads)}
+            blocks, warns = [], []
+            email = (c["email"] or "").strip().lower()
+            if not c.get("email_verified"):
+                blocks.append("email not verified")
+            if c.get("do_not_contact") or ag["stage"] == "do_not_contact":
+                blocks.append("do not contact")
+            if email_hash(email) in suppressed:
+                blocks.append("on the suppression list")
+            if not email_allowed(ag):
+                blocks.append("not a confirmed Ltd/LLP/PLC")
+            if not leads:
+                blocks.append("no unused hot lead in this city today")
+            if email in pushed:
+                blocks.append("already pushed to Smartlead")
+            if not cids[role]:
+                warns.append(f"no {ROLE_LABEL[role].lower()} campaign chosen in Settings → Outreach yet")
+            need = needed[role] or {"first_name", "agency", "niche", "city", *(f"lead1_{v}" for v in LEAD_VARS)}
+            empty = sorted(v for v in need if str({**fields, "email": email}.get(v, "") or "").strip() == "")
+            if empty:
+                if len(leads) == 1 and all(v.startswith("lead2_") for v in empty):
+                    blocks.append("only 1 hot lead, but this campaign's email uses lead2_ variables")
+                else:
+                    blocks.append("empty variables: " + ", ".join(empty))
+            if not blocks:
+                try:
+                    if _in_smartlead(sl, email):
+                        blocks.append("already in a Smartlead campaign")
+                except Exception as exc:
+                    warns.append(f"couldn't check Smartlead for this email: {exc}"[:200])
+            if blocks and blocked >= 30:
+                continue
+            status = "blocked" if blocks else "built"
+            if not blocks:
+                taken.update(fields["_lead_keys"])
+                good += 1
+            else:
+                blocked += 1
+            store.q("""insert into outreach_queue (date, agency_id, contact_id, campaign_role, fields, warnings, status)
+                       values (%s, %s, %s, %s, %s, %s, %s)""",
+                    (today, ag["id"], c["id"], role, Jsonb(fields), Jsonb(blocks + warns), status))
     return queue(store, today)
 
 
@@ -252,8 +296,8 @@ def remove(store, rid: int) -> None:
 
 
 def move(store, rid: int, role: str) -> None:
-    if role not in ("main", "fallback"):
-        raise ValueError("role must be main or fallback")
+    if role not in ROLES:
+        raise ValueError("campaign must be leaders or sales")
     store.q("update outreach_queue set campaign_role = %s where id = %s and status in ('built', 'approved')", (role, rid))
 
 
@@ -319,7 +363,7 @@ def push(store, sl, row_ids: list[int]) -> list[dict]:
             continue
         cid = cids.get(r["campaign_role"])
         if not cid:
-            out.append({"id": rid, "ok": False, "error": f"no {r['campaign_role']} campaign set in Settings → Outreach"})
+            out.append({"id": rid, "ok": False, "error": f"no {ROLE_LABEL.get(r['campaign_role'], r['campaign_role']).lower()} campaign set in Settings → Outreach"})
             continue
         ok, err, lead_id = _push_one(sl, cid, r["fields"], r["fields"]["_email"])
         if ok:
@@ -342,7 +386,7 @@ def test_push(store, settings, sl, rid: int | None = None) -> dict:
         raise ValueError("build the queue first: the test uses a real row's variables")
     cid = campaign_ids(store).get(r["campaign_role"])
     if not cid:
-        raise ValueError(f"no {r['campaign_role']} campaign set in Settings → Outreach")
+        raise ValueError(f"no {ROLE_LABEL.get(r['campaign_role'], r['campaign_role']).lower()} campaign set in Settings → Outreach")
     fields = {**r["fields"], "_email": settings.owner_test_email}
     ok, err, lead_id = _push_one(sl, cid, fields, settings.owner_test_email, allow_other=True)
     store.q("""insert into outreach_queue (date, agency_id, contact_id, campaign_role, fields, status, smartlead_lead_id,
@@ -448,8 +492,31 @@ def categorise(store, sl, reply_id: int, category: str, today: dt.date | None = 
                 smartlead.append("added to Smartlead's block list")
         except Exception as exc:
             smartlead.append(f"Smartlead update failed: {exc}"[:200])
+    if sl is not None and aid and category in COLLEAGUE_STOP:
+        smartlead += _stop_colleagues(store, sl, aid, email, category)
     store.q("update outreach_replies set category = %s, categorised_at = now() where id = %s", (category, reply_id))
     return {"id": reply_id, "category": category, "crm": done, "smartlead": smartlead}
+
+
+# A reply from one person at an agency stops the emails to their colleague in the other campaign. Smartlead's
+# API has no documented "pause this lead" call, so this uses the category endpoint with pause_lead (the agency
+# as a whole is interested / not interested). "Not now" has no Smartlead category: it's left to you.
+COLLEAGUE_STOP = ("interested", "not_interested", "unsubscribe")
+
+
+def _stop_colleagues(store, sl, agency_id: int, email: str | None, category: str) -> list[str]:
+    from .smartlead import CATEGORY_IDS
+    out = []
+    rows = store.q("""select id, fields->>'_email' as email, smartlead_lead_id, smartlead_campaign_id from outreach_queue
+                      where agency_id = %s and status = 'pushed' and not is_test and smartlead_lead_id is not null
+                        and lower(fields->>'_email') <> lower(%s)""", (agency_id, email or ""))
+    for r in rows:
+        try:
+            sl.set_category(int(r["smartlead_campaign_id"]), int(r["smartlead_lead_id"]), CATEGORY_IDS[category], pause=True)
+            out.append(f"colleague {r['email']} paused in Smartlead")
+        except Exception as exc:
+            out.append(f"couldn't pause colleague {r['email']}: {exc}"[:200])
+    return out
 
 
 # ---------------------------------------------------------------------------

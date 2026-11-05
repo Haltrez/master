@@ -136,6 +136,15 @@ def test_brave_website_and_hunter_valid_only(store):
             {"url": "https://www.airevalleyrecruitment.co.uk/about"}]}})
 
     def hunter_h(req):
+        if req.url.path.endswith("domain-search"):   # the agency's people: sales staff for the sales campaign
+            v = {"status": "valid"}
+            return httpx.Response(200, json={"data": {"emails": [
+                {"value": "kim@airevalleyrecruitment.co.uk", "first_name": "Kim", "last_name": "Lee", "confidence": 95,
+                 "position": "Senior Recruitment Consultant", "verification": v},
+                {"value": "max@airevalleyrecruitment.co.uk", "first_name": "Max", "last_name": "Ray", "confidence": 90,
+                 "position": "Office Administrator", "verification": v},
+                {"value": "ola@airevalleyrecruitment.co.uk", "first_name": "Ola", "last_name": "Fox", "confidence": 90,
+                 "position": "Recruiter", "verification": {"status": "accept_all"}}]}})
         first = req.url.params["first_name"]
         status = "valid" if first == "John" else "accept_all"
         return httpx.Response(200, json={"data": {"email": f"{first.lower()}@airevalleyrecruitment.co.uk",
@@ -148,6 +157,9 @@ def test_brave_website_and_hunter_valid_only(store):
     cs = {c["first_name"]: c for c in store.contacts(ag["id"])}
     assert cs["John"]["email_verified"] and cs["John"]["email_status"] == "valid"
     assert not cs["Amy"]["email_verified"] and cs["Amy"]["email_status"] == "accept_all"
+    # verified sales people only; nobody who is neither a leader nor in sales
+    assert (cs["Kim"]["role"], cs["Kim"]["email_verified"], out["people_found"]) == ("Senior Recruitment Consultant", True, 1)
+    assert "Max" not in cs and "Ola" not in cs
 
 
 def test_suppressed_email_never_stored(store):

@@ -60,6 +60,39 @@ def best_match(name: str, items: list[dict[str, Any]]) -> tuple[dict[str, Any] |
     return best, conf
 
 
+SALES_PEOPLE_PER_AGENCY = 2
+
+
+def _hunter_people(store, agency_id: int, domain: str, hunter) -> int:
+    """One Hunter domain search (one credit): the agency's sales people (recruiters, consultants, BDMs) with
+    verified emails for the sales campaign, plus a founder/MD Hunter already knows. Skipped once the agency has
+    a verified sales contact."""
+    from .outreach import audience
+    have = store.contacts(agency_id)
+    if any(c.get("email_verified") and audience(c.get("role")) == "sales" for c in have):
+        return 0
+    added, sales = 0, 0
+    people = sorted(hunter.domain_people(domain, limit=20), key=lambda p: -int(p.get("confidence") or 0))
+    for p in people:
+        if not (p["verified"] and p["first_name"] and p["position"]) or store.is_suppressed(p["email"]):
+            continue
+        kind = audience(p["position"])
+        if kind == "sales" and sales >= SALES_PEOPLE_PER_AGENCY or kind not in ("sales", "leaders"):
+            continue
+        full = f"{p['first_name']} {p['last_name']}".strip()
+        match = next((c for c in have if c["full_name"].lower() == full.lower()), None)
+        if match is not None:      # a director Hunter knows: just take the verified email
+            if not match.get("email"):
+                store.update_contact(match["id"], {"email": p["email"], "email_verified": True, "email_status": "valid"})
+            continue
+        if store.add_contact({"agency_id": agency_id, "full_name": full, "first_name": p["first_name"],
+                              "role": p["position"], "email": p["email"], "email_verified": True,
+                              "email_status": "valid", "source": "website"}):
+            added += 1
+            sales += kind == "sales"
+    return added
+
+
 def enrich_agency(store, agency_id: int, ch: CachedCompaniesHouse, brave=None, hunter=None) -> dict[str, Any]:
     ag = store.get_agency(agency_id)
     if ag is None:
@@ -107,6 +140,7 @@ def enrich_agency(store, agency_id: int, ch: CachedCompaniesHouse, brave=None, h
     if hunter is not None and ag.get("website") and email_allowed(ag):
         from urllib.parse import urlsplit
         domain = (urlsplit(ag["website"]).hostname or "").removeprefix("www.")
+        result["people_found"] = _hunter_people(store, agency_id, domain, hunter)
         found = 0
         for c in [c for c in store.contacts(agency_id) if not c.get("email") and not c.get("do_not_contact")]:
             if found >= HUNTER_MAX_PER_AGENCY:

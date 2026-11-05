@@ -82,7 +82,7 @@ class FakeSmartlead(http.server.BaseHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         p = u.path.replace("/api/v1", "")
         if p == "/campaigns/":
-            return self._send([{"id": 11, "name": "E2E main", "status": self.status["11"], "max_leads_per_day": 50}])
+            return self._send([{"id": 11, "name": "E2E founders", "status": self.status["11"], "max_leads_per_day": 50}])
         if p.endswith("/email-accounts") and p.startswith("/campaigns/"):
             return self._send([{"id": 1}])
         if p.startswith("/email-accounts"):

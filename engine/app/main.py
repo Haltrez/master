@@ -307,7 +307,7 @@ class PushIn(BaseModel):
 
 
 class RowActionIn(BaseModel):
-    action: str                  # remove | swap | fallback | main
+    action: str                  # remove | swap | leaders | sales
     which: int = 1               # swap: lead 1 or 2
 
 
@@ -345,7 +345,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.15"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.16"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1365,10 +1365,10 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                 OR.remove(s, row_id)
             elif body.action == "swap":
                 OR.swap_lead(s, row_id, body.which)
-            elif body.action in ("fallback", "main"):
+            elif body.action in OR.ROLES:
                 OR.move(s, row_id, body.action)
             else:
-                raise ValueError("action must be remove, swap, fallback or main")
+                raise ValueError("action must be remove, swap, leaders or sales")
         except ValueError as exc:
             raise HTTPException(422, str(exc))
         return OR.row(s, row_id)
@@ -1404,7 +1404,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.get("/outreach/settings", dependencies=A)
     def outreach_settings_get():
         s = db()
-        return {"main_campaign_id": OR.setting(s, OR.S_MAIN), "fallback_campaign_id": OR.setting(s, OR.S_FALLBACK),
+        cids = OR.campaign_ids(s)
+        return {"leaders_campaign_id": cids["leaders"], "sales_campaign_id": cids["sales"],
                 "daily_push_limit": int(OR.setting(s, OR.S_LIMIT, 50)), "auto_push": bool(OR.setting(s, OR.S_AUTO, False)),
                 "send_window": OR.setting(s, OR.S_WINDOW, ""), "key_set": bool(settings.smartlead_api_key),
                 "owner_test_email": settings.owner_test_email or None}
@@ -1412,7 +1413,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     @app.patch("/outreach/settings", dependencies=A)
     def outreach_settings_patch(body: dict[str, Any]):
         s = db()
-        keys = {"main_campaign_id": OR.S_MAIN, "fallback_campaign_id": OR.S_FALLBACK, "daily_push_limit": OR.S_LIMIT,
+        keys = {"leaders_campaign_id": OR.S_LEADERS, "sales_campaign_id": OR.S_SALES, "daily_push_limit": OR.S_LIMIT,
                 "auto_push": OR.S_AUTO, "send_window": OR.S_WINDOW}
         bad = set(body) - set(keys)
         if bad:
