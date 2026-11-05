@@ -344,3 +344,26 @@ def test_scheduler_due():
     uk = ZoneInfo("Europe/London")
     t = dt.datetime(2026, 11, 6, 7, 31, tzinfo=uk)
     assert due(t, None, 7, 30) and not due(t, t.date(), 7, 30) and not due(t.replace(hour=7, minute=10), None, 7, 30)
+
+
+def test_prospect_csv_adds_people_to_tracked_agencies_by_title(api, store, sl):
+    seed(store, cities=1, per_city=2)
+    store.q("update agencies set website = 'https://www.agency2.co.uk' where name = 'Agency 2'")
+    csv_text = ("First Name,Last Name,Job Title,Email,Email Status,Company Name,Company Website,LinkedIn URL\n"
+                "Sam,Seller,Senior Recruitment Consultant,sam@agency1.co.uk,Verified,Agency 1 Ltd,,https://linkedin.com/in/sam\n"
+                "Pat,Person1,Managing Director,pat1@agency1.co.uk,Verified,Agency 1,,\n"         # already there: updated
+                "Bo,Boss,Founder,bo@agency2.co.uk,Verified,Agency Two Recruitment,agency2.co.uk,\n"  # matched by website
+                "Ann,Admin,Office Administrator,ann@agency1.co.uk,Verified,Agency 1,,\n"         # not emailed
+                "Ria,Risky,Recruiter,ria@agency1.co.uk,Catch-all,Agency 1,,\n"                 # added, not verified
+                "Zed,Elsewhere,Director,zed@other.co.uk,Verified,Some Other Agency,,\n")
+    r = api.post("/outreach/import-contacts", headers=H, json={"csv": csv_text}).json()
+    assert (r["added"], r["updated"], r["skipped_title"], r["unverified"]) == (3, 1, 1, 1)
+    assert r["by_campaign"] == {"leaders": 2, "sales": 2} and r["not_tracked"] == ["Some Other Agency"]
+    sam = store.one("select * from contacts where email = 'sam@agency1.co.uk'")
+    assert sam["email_verified"] and sam["role"] == "Senior Recruitment Consultant" and sam["source"] == "prospect"
+    assert not store.one("select email_verified from contacts where email = 'ria@agency1.co.uk'")["email_verified"]
+    rows = [x for x in OR.build_queue(store, Settings(), sl, today=TODAY) if x["agency_name"] == "Agency 1"]
+    assert {(x["campaign_role"], x["fields"]["_email"]) for x in rows if x["status"] == "built"} == {
+        ("leaders", "pat1@agency1.co.uk"), ("sales", "sam@agency1.co.uk")}
+    bad = api.post("/outreach/import-contacts", headers=H, json={"csv": "Name,Phone\nx,1\n"})
+    assert bad.status_code == 422 and "email column" in bad.json()["detail"]

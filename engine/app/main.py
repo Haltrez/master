@@ -259,6 +259,11 @@ class AgencyIn(BaseModel):
     website: str | None = None
 
 
+class ProspectsIn(BaseModel):
+    csv: str
+    trust_unlabelled: bool = True   # no email-status column: Smartlead Prospect only reveals checked emails
+
+
 class CrmListIn(BaseModel):
     csv: str
     mode: str | None = None      # exclude | flag
@@ -345,7 +350,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.16"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.17"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1424,6 +1429,14 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
             s.set_setting(keys[k], v)
         s.q("delete from http_cache where key = 'outreach:stats'")
         return outreach_settings_get()
+
+    @app.post("/outreach/import-contacts", dependencies=A)
+    def outreach_import_contacts(body: ProspectsIn):
+        from . import prospects
+        try:
+            return prospects.import_contacts(db(), body.csv, trust_unlabelled=body.trust_unlabelled)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
 
     @app.post("/outreach/test-connection", dependencies=A)
     def outreach_test_connection():

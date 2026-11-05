@@ -19,6 +19,7 @@ export function OutreachClient({ settings }: { settings: any }) {
       <Queue settings={settings} />
       <Replies />
       <Campaigns />
+      <ImportContacts />
       <Health />
     </div>
   );
@@ -228,6 +229,40 @@ function Campaigns() {
           </tbody>
         </table></div>
       )}
+    </Card>
+  );
+}
+
+function ImportContacts() {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<any>();
+  const [err, setErr] = useState<string>();
+  const [trust, setTrust] = useState(true);
+  async function upload(file?: File) {
+    if (!file) return;
+    setBusy(true); setErr(undefined); setRes(undefined);
+    try { setRes(await api("/outreach/import-contacts", { body: { csv: await file.text(), trust_unlabelled: trust } })); }
+    catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <Card title="Add contacts from Smartlead Prospect">
+      <p className="text-sm">In Smartlead → Prospect, find people at recruitment agencies, export them as CSV and upload the file here.
+        Each person is added to their agency and goes into the right campaign by job title. Works with Apollo exports too.</p>
+      <label className="mt-2 flex items-start gap-2 text-xs text-slate-600 dark:text-slate-400">
+        <input type="checkbox" className="mt-0.5" checked={trust} onChange={(e) => setTrust(e.target.checked)} />
+        <span>If the file has no email-status column, treat the emails as verified (Prospect only shows emails it has checked)</span></label>
+      <input type="file" accept=".csv,text/csv" aria-label="Prospect CSV" disabled={busy} className="mt-3 block w-full text-sm"
+        onChange={(e) => { upload(e.target.files?.[0]); e.target.value = ""; }} />
+      {busy && <p className="mt-2 text-sm text-slate-500">Reading the file…</p>}
+      <ErrorNote error={err} />
+      {res && <div className="mt-3 space-y-1 text-sm" data-testid="import-result">
+        <p><b>{res.added}</b> added, <b>{res.updated}</b> updated · {res.by_campaign.leaders} founders &amp; managers, {res.by_campaign.sales} sales people</p>
+        {res.unverified > 0 && <p className="text-amber-700 dark:text-amber-400">{res.unverified} emails not marked valid: kept, but never pushed.</p>}
+        {res.skipped_title > 0 && <p className="text-slate-500">{res.skipped_title} skipped: job title is neither a leader nor in sales.</p>}
+        {res.suppressed > 0 && <p className="text-slate-500">{res.suppressed} skipped: on the suppression list.</p>}
+        {res.not_tracked.length > 0 && <p className="text-slate-500">{res.not_tracked.length} companies aren't agencies we track
+          (no ads in your territories, so no hot leads to pitch): {res.not_tracked.slice(0, 10).join(", ")}{res.not_tracked.length > 10 ? "…" : ""}</p>}
+      </div>}
     </Card>
   );
 }

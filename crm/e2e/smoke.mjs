@@ -134,6 +134,10 @@ try {
   check(true, "inbox health shows each sending inbox");
   const html = await page.content();
   check(!html.includes("e2e-smartlead-key-never-in-browser"), "the Smartlead API key never reaches the browser");
+  await page.setInputFiles("input[aria-label='Prospect CSV']", { name: "prospects.csv", mimeType: "text/csv",
+    buffer: Buffer.from("First Name,Last Name,Job Title,Email,Company Name\nSam,Seller,Recruitment Consultant,sam@nowhere.test,Not An Agency We Track\n") });
+  await page.waitForSelector("[data-testid=import-result] >> text=aren't agencies we track");
+  check(true, "a Smartlead Prospect CSV can be uploaded on the outreach page");
   await page.goto(BASE + "/settings/outreach");
   await page.selectOption("#leaders_campaign_id", "11");
   await page.click("button:has-text('Save')");
