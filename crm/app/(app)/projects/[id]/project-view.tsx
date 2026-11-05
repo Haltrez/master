@@ -38,6 +38,11 @@ export function ProjectView({ initial }: { initial: any }) {
           action={<span className="flex gap-3 text-sm"><a href={`/api/engine/projects/${p.id}/result.xlsx`} className="font-medium" title="Leads and market demand only: safe to send">Excel for client</a>
             <a href={`/api/engine/projects/${p.id}/result.xlsx?notes=true`} className="text-slate-500" title="Adds the email and your private note">Excel + notes</a>
             <a href={`/api/engine/projects/${p.id}/result.csv`} className="text-slate-500">CSV</a></span>}>
+          {r.header_lines?.length > 0 && (
+            <div className="mb-3 space-y-1 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              {r.header_lines.map((l: string, i: number) => <p key={i}>{l}</p>)}
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="text-left uppercase tracking-wide text-slate-500">

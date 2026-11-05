@@ -28,15 +28,29 @@ def _width(header: str, values: list[Any]) -> float:
 
 
 def workbook(columns: list[str], rows: list[list[Any]], *, title: str = "Leads", summary: list[str] | None = None,
-             extra_sheets: dict[str, str] | None = None) -> bytes:
+             extra_sheets: dict[str, str] | None = None, header_lines: list[str] | None = None) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = title[:31]
+    top = 0
+    for line in header_lines or []:        # what the client must read first, above the table
+        ws.append([line])
+        top += 1
+        c = ws.cell(row=top, column=1)
+        c.font = Font(bold=True, color="92400E")
+        c.fill = PatternFill("solid", fgColor="FEF3C7")
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=top, start_column=1, end_row=top, end_column=max(1, min(len(columns), 10)))
+        ws.row_dimensions[top].height = max(18, 15 * (len(line) // 140 + 1))
+    if top:
+        ws.append([])
+        top += 1
+    head = top + 1
     ws.append(columns)
-    for c in ws[1]:
+    for c in ws[head]:
         c.fill, c.font = HEADER_FILL, HEADER_FONT
         c.alignment = Alignment(vertical="center", wrap_text=True)
-    ws.row_dimensions[1].height = 30
+    ws.row_dimensions[head].height = 30
     for r in rows:
         ws.append([("" if v is None else v) for v in r])
     last = ws.max_row
@@ -45,7 +59,7 @@ def workbook(columns: list[str], rows: list[list[Any]], *, title: str = "Leads",
         values = [row[j - 1] if j - 1 < len(row) else "" for row in rows]
         ws.column_dimensions[col].width = _width(name, values)
         wrap = ws.column_dimensions[col].width >= 40
-        for i in range(2, last + 1):
+        for i in range(head + 1, last + 1):
             cell = ws.cell(row=i, column=j)
             v = cell.value
             if isinstance(v, str) and v.startswith(("http://", "https://")):
@@ -53,14 +67,14 @@ def workbook(columns: list[str], rows: list[list[Any]], *, title: str = "Leads",
                 cell.value = "Open" if len(v) > 45 else v
                 cell.font = LINK_FONT
             cell.alignment = Alignment(vertical="top", wrap_text=wrap)
-    ws.freeze_panes = "C2" if len(columns) > 3 else "A2"
+    ws.freeze_panes = f"C{head + 1}" if len(columns) > 3 else f"A{head + 1}"
     if rows:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{last}"
+        ws.auto_filter.ref = f"A{head}:{get_column_letter(len(columns))}{last}"
     if "Status" in columns and rows:
         col = get_column_letter(columns.index("Status") + 1)
         dv = DataValidation(type="list", formula1='"' + ",".join(STATUSES) + '"', allow_blank=True)
         ws.add_data_validation(dv)
-        dv.add(f"{col}2:{col}{max(last, 2) + 500}")
+        dv.add(f"{col}{head + 1}:{col}{max(last, head + 1) + 500}")
     if summary:
         ws.append([])
         for line in summary:

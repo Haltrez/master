@@ -30,6 +30,11 @@ from .normalise import employer_norm
 
 log = logging.getLogger("research")
 
+NO_AGENCIES = re.compile(r"(?i)no agenc(?:y|ies)|agencies need not|not (?:accept|open to|work(?:ing)? with) "
+                         r"(?:any )?(?:recruitment )?agenc|third[- ]party recruit|unsolicited (?:cv|resume|candidate)|"
+                         r"do not (?:wish|want) to (?:be contacted|hear) (?:by|from) (?:recruitment )?agenc|"
+                         r"in-house recruit(?:ment|er)|we (?:do not|don't) use agencies|direct applicants only|"
+                         r"(?:speculative|agency) cvs? will (?:not|be)")
 CLOSED_WORDS = re.compile(r"(?i)vacancy (?:has )?(?:now )?(?:been )?closed|no longer (?:available|accepting)|this job has expired|"
                           r"position has been filled|applications? (?:are |is )?(?:now )?closed|job (?:is )?no longer")
 JOBISH = re.compile(r"(?i)job|career|vacanc|role|position|apply|estimat|manager|engineer|supervisor|recruit")
@@ -67,6 +72,7 @@ class Research:
         self._known = {employer_norm(b) for b in (settings.known_agency_brands or KNOWN_AGENCY_BRANDS)}
         self._last: dict[str, float] = {}
         self.ads: dict[str, dict] = {}       # every ad seen, by id, so check_ads can take ids only
+        self.seen_urls: set[str] = set()     # every URL returned by web_search (LinkedIn links must come from here)
 
     # -- helpers --------------------------------------------------------------------------------
     def _wait(self, key: str, seconds: float) -> None:
@@ -212,6 +218,9 @@ class Research:
             text = ""
             out["note"] = f"not a page I can read ({ctype})"
         out["closed_wording"] = bool(CLOSED_WORDS.search(text))
+        m = NO_AGENCIES.search(text)
+        if m:   # what the employer says about recruitment agencies, quoted for the Agency-friendly? column
+            out["agency_policy"] = text[max(0, m.start() - 120): m.end() + 120].strip()
         out["text"] = text
         return out
 
@@ -315,6 +324,9 @@ class Research:
             res = r.json().get("web", {}).get("results") or []
         except Exception as exc:
             return {"error": f"search failed: {type(exc).__name__}"}
+        for x in res:
+            if x.get("url"):
+                self.seen_urls.add(x["url"].rstrip("/"))
         return {"results": [{"title": x.get("title"), "url": x.get("url"), "snippet": plain_text(x.get("description"), 240)}
                             for x in res]}
 

@@ -48,6 +48,23 @@ Hard rules (always, even if the brief is silent):
 say so in the row's notes.
 - Accuracy beats volume: a short honest list is the right answer when the market is thin. Explain why in the note.
 - No personal emails. No scraping of LinkedIn or Indeed (the tools refuse anyway).
+
+What goes to the client (the sheet is sent to the agency as it is):
+- For lead lists, always add an "Agency-friendly?" column, just before Notes unless the brief places it: \
+"Yes", "No: <their words, short>" or "Unknown". Check every employer's careers page and job pages (fetch_page \
+returns agency_policy when the page talks about agencies, third-party recruiters, unsolicited CVs or in-house \
+recruiters). Never hide a "No": it is the most useful thing to know before calling.
+- Notes: one short line useful to the client (pay, project size, travel, team, contract length). No working notes: \
+no tool names, no "Haiku", no "CAUTION", no Companies House numbers or SIC codes, no doubts about your own research \
+(those go in the private note).
+- LinkedIn: only a full profile URL copied exactly from a web_search result for the right person. If you can't, write \
+"unknown". Never shorten or guess a URL.
+- Weak fits and doubts are said openly in the row, e.g. Match "Related role (energy project, 6-month contract: weak \
+fit)" or Location "Manchester (ad says Manchester; company mostly works in East Anglia: location unconfirmed)".
+- header_lines go above the table, for what the client must read first: employers that say no agencies (and why \
+they may still be worth an approach), briefs with no direct employers and who is running those roles instead, \
+and what you'll keep watching for. Plain, honest, short: the client will respect it.
+- summary_lines go under the table (e.g. market demand per role, naming the agencies, including the client's own ads).
 - Be economical: don't repeat the same search; batch ad ids into check_ads; keep going until the brief is answered \
 or you have searched every sensible variation, then submit. You have about 80 tool steps."""
 
@@ -111,10 +128,11 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _obj({
          "columns": SA,
          "rows": {"type": "array", "items": SA, "description": "One row per lead, values in column order"},
+         "header_lines": {"type": "array", "items": S, "description": "What the client must read first, shown above the table"},
          "summary_lines": {"type": "array", "items": S, "description": "Lines for under the table, e.g. market demand per role"},
          "email_subject": S, "email_body": S,
          "note": {"type": "string", "description": "Frank note to Roberts: thin briefs, least-sure leads, what to check by hand"}},
-         ["columns", "rows", "summary_lines", "note"])},
+         ["columns", "rows", "header_lines", "summary_lines", "note"])},
 ]
 
 
@@ -148,6 +166,10 @@ def result_csv(result: dict) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     cols = result.get("columns") or []
+    for line in result.get("header_lines") or []:
+        w.writerow([line])
+    if result.get("header_lines"):
+        w.writerow([])
     w.writerow(cols)
     for r in result.get("rows") or []:
         w.writerow((list(r) + [""] * len(cols))[:max(len(cols), len(r))])
@@ -187,11 +209,31 @@ def _describe(name: str, a: dict) -> str:
     return name
 
 
+def _clean_linkedin(research, rows: list[list[str]]) -> tuple[list[list[str]], int]:
+    """A LinkedIn link must be one a search actually returned, whole. Anything else becomes "unknown"."""
+    seen = getattr(research, "seen_urls", None)
+    if seen is None:
+        return rows, 0
+    fixed, out = 0, []
+    for r in rows:
+        new = []
+        for v in r:
+            if isinstance(v, str) and "linkedin.com/" in v and v.strip().rstrip("/") not in seen:
+                new.append("unknown"); fixed += 1
+            else:
+                new.append(v)
+        out.append(new)
+    return out, fixed
+
+
 def _run_tool(research, store, pid: int, name: str, a: dict) -> Any:
     if name == "submit_results":
-        result = {k: a.get(k) for k in ("columns", "rows", "summary_lines", "email_subject", "email_body", "note")}
+        rows, fixed = _clean_linkedin(research, a.get("rows") or [])
+        a = {**a, "rows": rows}
+        result = {k: a.get(k) for k in ("columns", "rows", "header_lines", "summary_lines", "email_subject", "email_body", "note")}
         store.q("update projects set result = %s where id = %s", (json.dumps(result), pid))
-        return {"ok": True, "rows": len(a.get("rows") or [])}
+        return {"ok": True, "rows": len(a.get("rows") or []),
+                **({"linkedin_links_removed": fixed, "why": "not found whole in a search result"} if fixed else {})}
     fn = getattr(research, name, None)
     if fn is None:
         return {"error": f"unknown tool {name}"}

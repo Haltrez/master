@@ -96,3 +96,27 @@ def test_excel_downloads(store):
     assert ws["C2"].hyperlink.target == "https://x/1" and ws.freeze_panes and wb.sheetnames == ["Leads"]   # client copy
     full = load_workbook(io.BytesIO(c.get(f"/projects/{pid}/result.xlsx?notes=true", headers=H).content))
     assert full["Note (private)"]["A1"].value == "thin" and "Email" in full.sheetnames
+
+
+def test_linkedin_links_must_come_from_search_and_header_lines_go_on_top(store):
+    import io
+    from openpyxl import load_workbook
+    from app.projects import _clean_linkedin
+    r = SimpleNamespace(seen_urls={"https://uk.linkedin.com/in/ben-milner-0b388974"})
+    rows, fixed = _clean_linkedin(r, [["DL", "https://uk.linkedin.com/in/ben-milner-0b388974/"], ["Sudlows", "uk.linkedin.com/in/zac"]])
+    assert rows == [["DL", "https://uk.linkedin.com/in/ben-milner-0b388974/"], ["Sudlows", "unknown"]] and fixed == 1
+    sub = {**SUBMIT, "header_lines": ["DL M&E and Sudlows say no agencies on their careers pages."]}
+    c, _, _ = app_with(store, [resp("tool_use", Block(type="tool_use", id="t1", name="submit_results", input=sub)),
+                               resp("end_turn", Block(type="text", text="Done."))])
+    pid = c.post("/projects", headers=H, json={"brief": BRIEF}).json()["id"]
+    ws = load_workbook(io.BytesIO(c.get(f"/projects/{pid}/result.xlsx", headers=H).content))["Leads"]
+    assert ws["A1"].value.startswith("DL M&E and Sudlows") and [x.value for x in ws[3]] == SUBMIT["columns"]
+    assert c.get(f"/projects/{pid}/result.csv", headers=H).text.lstrip("﻿").startswith("DL M&E and Sudlows")
+
+
+def test_careers_pages_saying_no_agencies_are_flagged():
+    from app.research_tools import NO_AGENCIES
+    assert NO_AGENCIES.search("Job board - No agencies please")
+    assert NO_AGENCIES.search("Our CV route is not open to third-party recruiters.")
+    assert NO_AGENCIES.search("Recruitment is handled by our in-house recruitment team")
+    assert not NO_AGENCIES.search("We are an employment agency friendly business park")
