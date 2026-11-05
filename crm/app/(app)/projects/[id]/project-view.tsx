@@ -35,7 +35,8 @@ export function ProjectView({ initial }: { initial: any }) {
 
       {r && (
         <Card title={`Results: ${r.rows?.length || 0} rows`} className="mb-4"
-          action={<a href={`/api/engine/projects/${p.id}/result.csv`} className="text-sm font-medium">Download CSV</a>}>
+          action={<span className="flex gap-3 text-sm"><a href={`/api/engine/projects/${p.id}/result.xlsx`} className="font-medium">Download Excel</a>
+            <a href={`/api/engine/projects/${p.id}/result.csv`} className="text-slate-500">CSV</a></span>}>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="text-left uppercase tracking-wide text-slate-500">

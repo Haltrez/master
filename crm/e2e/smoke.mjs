@@ -84,6 +84,8 @@ try {
   check(/^[12] \/ 3$/.test(progress.trim()), `order collected and sent its leads (shows "${progress.trim()}")`);
   const csvText = await page.evaluate(() => fetch("/api/engine/orders/1/leads.csv").then((r) => r.text()));
   check(csvText.includes("Harlow Group"), "order CSV has the lead");
+  const xlsxHead = await page.evaluate(() => fetch("/api/engine/orders/1/leads.xlsx").then(async (r) => [r.headers.get("content-type"), new Uint8Array(await r.arrayBuffer()).slice(0, 2)]));
+  check(String(xlsxHead[0]).includes("spreadsheetml") && xlsxHead[1][0] === 80 && xlsxHead[1][1] === 75, "order downloads as a formatted Excel file");
   await page.click("[data-testid=order] button:has-text('Pause')");
   await page.waitForSelector("[data-testid=order] >> text=paused");
   check(true, "order paused");

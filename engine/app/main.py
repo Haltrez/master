@@ -331,7 +331,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.7"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.8"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1207,6 +1207,18 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     def agencies_overview_ep():
         return O.agencies_overview(db())
 
+    XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    @app.get("/orders/{order_id}/leads.xlsx", dependencies=A)
+    def order_xlsx(order_id: int):
+        from .xlsx_export import workbook
+        s = db()
+        o = O.get_order(s, order_id) or notfound("order")
+        rows = [O.sheet_row(r) for r in O.order_lead_rows(s, order_id)]
+        name = "".join(ch if ch.isalnum() else "-" for ch in f"{o['agency_name']}-{o['industry']}-{o['location']}").lower()
+        return Response(content=workbook(O.SHEET_HEADERS, rows, title="Hot leads"), media_type=XLSX,
+                        headers={"Content-Disposition": f"attachment; filename={name}.xlsx"})
+
     # -- Google -------------------------------------------------------------------------------------
     @app.get("/google/status", dependencies=A)
     def google_status_ep():
@@ -1346,6 +1358,18 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         name = "".join(ch if ch.isalnum() else "-" for ch in p["title"][:50]).strip("-").lower() or f"project-{project_id}"
         return Response(content="\ufeff" + P.result_csv(p["result"]), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f"attachment; filename={name}.csv"})
+
+    @app.get("/projects/{project_id}/result.xlsx", dependencies=A)
+    def project_xlsx(project_id: int):
+        from .xlsx_export import workbook
+        p = P.get(db(), project_id) or notfound("project")
+        r = p.get("result") or notfound("results")
+        email = (f"Subject: {r.get('email_subject')}\n\n" if r.get("email_subject") else "") + (r.get("email_body") or "")
+        name = "".join(ch if ch.isalnum() else "-" for ch in p["title"][:50]).strip("-").lower() or f"project-{project_id}"
+        return Response(content=workbook(r.get("columns") or [], r.get("rows") or [], title="Leads",
+                                         summary=r.get("summary_lines"), extra_sheets={"Email": email, "Note": r.get("note")}),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename={name}.xlsx"})
 
     @app.get("/assistant/conversations/{conversation_id}", dependencies=A)
     def assistant_history(conversation_id: str):

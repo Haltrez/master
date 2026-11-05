@@ -80,3 +80,17 @@ def test_project_without_submit_is_an_error_and_short_briefs_are_refused(store):
     pid = c.post("/projects", headers=H, json={"brief": BRIEF}).json()["id"]
     p = c.get(f"/projects/{pid}", headers=H).json()
     assert p["status"] == "error" and "without submitting" in p["error"]
+
+
+def test_excel_downloads(store):
+    import io
+    from openpyxl import load_workbook
+    c, _, _ = app_with(store, [resp("tool_use", Block(type="tool_use", id="t1", name="submit_results", input=SUBMIT)),
+                               resp("end_turn", Block(type="text", text="Done."))])
+    pid = c.post("/projects", headers=H, json={"brief": BRIEF}).json()["id"]
+    r = c.get(f"/projects/{pid}/result.xlsx", headers=H)
+    assert r.status_code == 200 and "spreadsheetml" in r.headers["content-type"]
+    wb = load_workbook(io.BytesIO(r.content))
+    ws = wb["Leads"]
+    assert [c.value for c in ws[1]] == SUBMIT["columns"] and ws["B2"].value == "DL M&E"
+    assert ws["C2"].hyperlink.target == "https://x/1" and ws.freeze_panes and wb["Note"]["A1"].value == "thin"

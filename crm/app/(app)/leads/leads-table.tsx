@@ -22,7 +22,8 @@ export function LeadsTable({ orders, leads, orderId }: { orders: any[]; leads: a
           <option value="">All orders</option>
           {orders.map((o) => <option key={o.id} value={o.id}>{o.agency_name} · {o.industry} · {o.location}</option>)}
         </Select>
-        {orderId && <a href={`/api/engine/orders/${orderId}/leads.csv`} className="text-sm">Download CSV</a>}
+        {orderId && <><a href={`/api/engine/orders/${orderId}/leads.xlsx`} className="text-sm font-medium">Download Excel</a>
+          <a href={`/api/engine/orders/${orderId}/leads.csv`} className="text-sm text-slate-500">CSV</a></>}
         <span className="ml-auto text-sm text-slate-500">{leads.length} sent · {counts.contacted || 0} contacted ·{" "}
           {counts.meeting || 0} meetings · {counts.placement || 0} placements</span>
       </div>

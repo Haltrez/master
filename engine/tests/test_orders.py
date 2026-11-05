@@ -448,3 +448,15 @@ def test_crm_list_parsing_finds_columns_by_header():
     import pytest
     with pytest.raises(ValueError):
         parse("Foo,Bar\n1,2\n")
+
+
+def test_order_excel_download(store, api_with):
+    import io
+    from openpyxl import load_workbook
+    o = make(store)
+    add_leads(store, 2, label="IT & Tech - Leeds")
+    O.fill_order(store, Settings(), o["id"])
+    r = api_with().get(f"/orders/{o['id']}/leads.xlsx", headers=H)
+    ws = load_workbook(io.BytesIO(r.content))["Hot leads"]
+    assert [c.value for c in ws[1]] == O.SHEET_HEADERS and ws.max_row == 3
+    assert ws.data_validations.dataValidation and ws.auto_filter.ref
