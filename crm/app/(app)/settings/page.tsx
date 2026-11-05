@@ -12,6 +12,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   return (
     <>
       <PageHeader title="Settings">
+        <a href="/settings/outreach" className="text-sm">Outreach (Smartlead) →</a>
         <form action="/api/logout" method="post"><button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700">Log out</button></form>
       </PageHeader>
       {sp.google === "error" && <div className="mb-4"><ErrorNote error={`Google didn't connect: ${sp.reason || "try again"}`} /></div>}

@@ -58,6 +58,7 @@ class Hooks:
     make_claude: Callable[[Settings], Any] | None = None              # None -> anthropic.Anthropic()
     make_tools: Callable[[PgStore, Settings], Any] | None = None      # None -> pipeline.make_tools
     make_research: Callable[[PgStore, Settings], Any] | None = None   # None -> research_tools.Research
+    make_smartlead: Callable[[Settings], Any] | None = None           # None -> smartlead.Smartlead
     run_in_thread: bool = True                                        # tests run projects inline
 
 
@@ -301,6 +302,19 @@ class GoogleExchangeIn(BaseModel):
     redirect_uri: str
 
 
+class PushIn(BaseModel):
+    ids: list[int]
+
+
+class RowActionIn(BaseModel):
+    action: str                  # remove | swap | fallback | main
+    which: int = 1               # swap: lead 1 or 2
+
+
+class CategoryIn(BaseModel):
+    category: str
+
+
 class ProjectIn(BaseModel):
     brief: str
     title: str | None = None
@@ -331,7 +345,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.14"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.15"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1289,6 +1303,133 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                 s.finish_task(task_id, "error", error=str(exc)[:300])
         bg.add_task(work)
         return {"task_id": task_id, "conversation_id": cid, "status": "running"}
+
+    # -- outreach (Smartlead) --------------------------------------------------------------------------
+    from . import outreach as OR
+    from .smartlead import Smartlead, SmartleadError
+
+    def smartlead():
+        if hooks.make_smartlead is not None:
+            return hooks.make_smartlead(settings)
+        try:
+            return Smartlead(settings.smartlead_api_key, base_url=settings.smartlead_base_url)
+        except SmartleadError as exc:
+            raise HTTPException(400, str(exc))
+
+    def sl_call(fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except SmartleadError as exc:
+            raise HTTPException(502, str(exc))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @app.get("/outreach/stats", dependencies=A)
+    def outreach_stats(refresh: bool = False):
+        return sl_call(OR.stats, db(), smartlead(), refresh=refresh)
+
+    @app.get("/outreach/campaigns", dependencies=A)
+    def outreach_campaigns():
+        return sl_call(OR.campaigns, db(), smartlead())
+
+    @app.post("/outreach/campaigns/{campaign_id}/pause", dependencies=A)
+    def outreach_pause(campaign_id: int):
+        return sl_call(smartlead().set_status, campaign_id, "PAUSED") or {"ok": True}
+
+    @app.post("/outreach/campaigns/{campaign_id}/resume", dependencies=A)
+    def outreach_resume(campaign_id: int):
+        return sl_call(smartlead().set_status, campaign_id, "START") or {"ok": True}
+
+    @app.get("/outreach/queue", dependencies=A)
+    def outreach_queue_ep():
+        return OR.queue(db())
+
+    @app.post("/outreach/queue/build", dependencies=A)
+    def outreach_build(limit: int | None = None):
+        return sl_call(OR.build_queue, db(), settings, smartlead(), limit=limit)
+
+    @app.post("/outreach/queue/push", dependencies=A)
+    def outreach_push(body: PushIn):
+        return sl_call(OR.push, db(), smartlead(), body.ids)
+
+    @app.post("/outreach/queue/test-push", dependencies=A)
+    def outreach_test_push(row_id: int | None = None):
+        return sl_call(OR.test_push, db(), settings, smartlead(), row_id)
+
+    @app.post("/outreach/queue/{row_id}", dependencies=A)
+    def outreach_row(row_id: int, body: RowActionIn):
+        s = db()
+        OR.row(s, row_id) or notfound("queue row")
+        try:
+            if body.action == "remove":
+                OR.remove(s, row_id)
+            elif body.action == "swap":
+                OR.swap_lead(s, row_id, body.which)
+            elif body.action in ("fallback", "main"):
+                OR.move(s, row_id, body.action)
+            else:
+                raise ValueError("action must be remove, swap, fallback or main")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return OR.row(s, row_id)
+
+    @app.get("/outreach/queue/{row_id}/preview", dependencies=A)
+    def outreach_preview(row_id: int):
+        s = db()
+        r = OR.row(s, row_id) or notfound("queue row")
+        sl = smartlead() if settings.smartlead_api_key or hooks.make_smartlead else None
+        return sl_call(OR.preview, s, sl, r)
+
+    @app.get("/outreach/replies", dependencies=A)
+    def outreach_replies_ep():
+        return OR.replies(db())
+
+    @app.post("/outreach/replies/sync", dependencies=A)
+    def outreach_sync():
+        return sl_call(OR.sync_replies, db(), smartlead())
+
+    @app.post("/outreach/replies/{reply_id}/categorise", dependencies=A)
+    def outreach_categorise(reply_id: int, body: CategoryIn):
+        return sl_call(OR.categorise, db(), smartlead(), reply_id, body.category)
+
+    @app.get("/outreach/health", dependencies=A)
+    def outreach_health(refresh: bool = False):
+        s = db()
+        if not refresh:
+            cached = s.cache_get("outreach:health", max_age_days=15 / 1440)
+            if cached:
+                return cached
+        return sl_call(OR.health, s, smartlead())
+
+    @app.get("/outreach/settings", dependencies=A)
+    def outreach_settings_get():
+        s = db()
+        return {"main_campaign_id": OR.setting(s, OR.S_MAIN), "fallback_campaign_id": OR.setting(s, OR.S_FALLBACK),
+                "daily_push_limit": int(OR.setting(s, OR.S_LIMIT, 50)), "auto_push": bool(OR.setting(s, OR.S_AUTO, False)),
+                "send_window": OR.setting(s, OR.S_WINDOW, ""), "key_set": bool(settings.smartlead_api_key),
+                "owner_test_email": settings.owner_test_email or None}
+
+    @app.patch("/outreach/settings", dependencies=A)
+    def outreach_settings_patch(body: dict[str, Any]):
+        s = db()
+        keys = {"main_campaign_id": OR.S_MAIN, "fallback_campaign_id": OR.S_FALLBACK, "daily_push_limit": OR.S_LIMIT,
+                "auto_push": OR.S_AUTO, "send_window": OR.S_WINDOW}
+        bad = set(body) - set(keys)
+        if bad:
+            raise HTTPException(422, f"unknown settings {sorted(bad)}")
+        if "daily_push_limit" in body and not 1 <= int(body["daily_push_limit"]) <= 400:
+            raise HTTPException(422, "daily push limit must be 1-400")
+        for k, v in body.items():
+            s.set_setting(keys[k], v)
+        s.q("delete from http_cache where key = 'outreach:stats'")
+        return outreach_settings_get()
+
+    @app.post("/outreach/test-connection", dependencies=A)
+    def outreach_test_connection():
+        try:
+            return smartlead().test()
+        except SmartleadError as exc:
+            return {"ok": False, "error": str(exc)}
 
     # -- project agent (research briefs) -----------------------------------------------------------------
     from . import projects as P

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "./ui";
 
-const MAIN = [["/", "Orders"], ["/projects", "Projects"], ["/leads", "Leads"], ["/agencies", "Agencies"], ["/settings", "Settings"]] as const;
+const MAIN = [["/", "Orders"], ["/projects", "Projects"], ["/outreach", "Outreach"], ["/leads", "Leads"], ["/agencies", "Agencies"], ["/settings", "Settings"]] as const;
 
 const linkCls = (active: boolean) => cn("whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm no-underline hover:no-underline",
   active ? "bg-brand-soft font-medium text-brand dark:bg-blue-950 dark:text-blue-300"

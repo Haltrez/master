@@ -123,6 +123,24 @@ try {
   await page.click("button:has-text('Start collecting')");
   await page.waitForSelector("[data-testid=territory] >> text=IT & Tech - York");
   check(true, "a territory can be collected before it's sold");
+  await page.goto(BASE + "/outreach");
+  await page.waitForSelector("text=E2E main");
+  await page.waitForSelector("[data-testid=outreach-stats] >> text=40 / 40");
+  check(true, "outreach page shows Smartlead campaigns and stats");
+  await page.click("button:has-text('Pause')");
+  await page.waitForSelector("button:has-text('Resume')");
+  check(true, "a campaign can be paused and resumed from the CRM");
+  await page.waitForSelector("text=e2e@sender.test");
+  check(true, "inbox health shows each sending inbox");
+  const html = await page.content();
+  check(!html.includes("e2e-smartlead-key-never-in-browser"), "the Smartlead API key never reaches the browser");
+  await page.goto(BASE + "/settings/outreach");
+  await page.selectOption("#main_campaign_id", "11");
+  await page.click("button:has-text('Save')");
+  await page.waitForSelector("text=Saved ✓");
+  await page.click("button:has-text('Test connection')");
+  await page.waitForSelector("text=OK");
+  check(true, "outreach settings save and the connection test passes");
   await page.goto(BASE + "/projects");
   await page.fill("textarea[aria-label='Project brief']", "TASK: Build a hot-lead list for a prospect agency, M&E in Manchester.");
   await page.click("button:has-text('Start project')");
@@ -132,7 +150,7 @@ try {
   await page.screenshot({ path: shots + "orders-desktop.png", fullPage: true });
 
   const phone = await browser.newPage({ ...playwright.devices["iPhone 13"], storageState: await page.context().storageState() });
-  for (const p of ["/", "/projects", "/leads", "/agencies", "/settings"]) {
+  for (const p of ["/", "/projects", "/outreach", "/leads", "/agencies", "/settings"]) {
     await phone.goto(BASE + p);
     const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check(overflow <= 1, `no sideways page scroll on a phone: ${p}`);

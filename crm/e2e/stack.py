@@ -67,6 +67,52 @@ class FakeReed(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class FakeSmartlead(http.server.BaseHTTPRequestHandler):
+    """Just enough of the Smartlead API for the Outreach page (the real API is never called in tests)."""
+    status = {"11": "ACTIVE"}
+
+    def _send(self, body):
+        data = json.dumps(body).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        p = u.path.replace("/api/v1", "")
+        if p == "/campaigns/":
+            return self._send([{"id": 11, "name": "E2E main", "status": self.status["11"], "max_leads_per_day": 50}])
+        if p.endswith("/email-accounts") and p.startswith("/campaigns/"):
+            return self._send([{"id": 1}])
+        if p.startswith("/email-accounts"):
+            return self._send([{"id": 1, "from_email": "e2e@sender.test", "message_per_day": 15, "daily_sent_count": 2,
+                                "is_smtp_success": True, "is_imap_success": True,
+                                "warmup_details": {"status": "ACTIVE", "warmup_reputation": "100%"}}])
+        if p.endswith("/analytics-by-date"):
+            return self._send({"sent_count": "40", "reply_count": "2", "bounce_count": "0", "unsubscribed_count": "0"})
+        if p.endswith("/sequences"):
+            return self._send([{"seq_number": 1, "subject": "{{lead1_employer}}", "email_body": "Hi {{first_name}}"}])
+        if p.endswith("/statistics"):
+            return self._send({"data": []})
+        if p.startswith("/analytics/mailbox"):
+            return self._send({"data": {"email_health_metrics": [{"email_account": "e2e@sender.test", "sent": 40, "bounced": 0}]}})
+        return self._send({})
+
+    def do_POST(self):
+        p = urllib.parse.urlparse(self.path).path.replace("/api/v1", "")
+        n = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(n) or b"{}")
+        if p.endswith("/status"):
+            self.status["11"] = "PAUSED" if body.get("status") == "PAUSED" else "ACTIVE"
+        if p == "/master-inbox/inbox-replies":
+            return self._send({"messages": []})
+        return self._send({"ok": True})
+
+    def log_message(self, *a):
+        pass
+
+
 def wait_http(url, timeout=60, headers=None):
     import urllib.request
     end = time.time() + timeout
@@ -103,13 +149,17 @@ def main() -> int:
         subprocess.run(run_as + [f"{PG_BIN}/psql", "-h", work, "-U", "postgres", "-q", "-c",
                                  "update app_settings set value = '0' where key = 'archive_checks_per_run'"],
                        check=True, capture_output=True)
-        reed_port, engine_port, crm_port = free_port(), free_port(), free_port()
+        reed_port, engine_port, crm_port, sl_port = free_port(), free_port(), free_port(), free_port()
         srv = http.server.ThreadingHTTPServer(("127.0.0.1", reed_port), FakeReed)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
+        slsrv = http.server.ThreadingHTTPServer(("127.0.0.1", sl_port), FakeSmartlead)
+        threading.Thread(target=slsrv.serve_forever, daemon=True).start()
 
         secret = "e2e-engine-secret-" + os.urandom(6).hex()
         env = {**os.environ, "DATABASE_URL": dsn, "ENGINE_API_SECRET": secret, "REED_API_KEY": "fake",
-               "REED_BASE_URL": f"http://127.0.0.1:{reed_port}/api/1.0", "REED_REQUESTS_PER_SECOND": "0"}
+               "REED_BASE_URL": f"http://127.0.0.1:{reed_port}/api/1.0", "REED_REQUESTS_PER_SECOND": "0",
+               "SMARTLEAD_API_KEY": "e2e-smartlead-key-never-in-browser", "SMARTLEAD_BASE_URL": f"http://127.0.0.1:{sl_port}/api/v1",
+               "OWNER_TEST_EMAIL": "owner@e2e.test"}
         procs.append(subprocess.Popen([PY, "-m", "uvicorn", "app.main:app", "--port", str(engine_port)], cwd=ENGINE, env=env,
                                       stdout=open(f"{work}/engine.log", "w"), stderr=subprocess.STDOUT))
         wait_http(f"http://127.0.0.1:{engine_port}/health", headers={"X-API-Key": secret})
