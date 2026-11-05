@@ -309,7 +309,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.3"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.4"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1192,6 +1192,26 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
             raise HTTPException(422, "message is empty")
         s = db()
         return AI.chat(s, claude(), settings.assistant_model, toolbox(s, bg), body.message, body.conversation_id)
+
+    @app.post("/assistant/start", dependencies=A, status_code=202)
+    def assistant_start(body: ChatIn, bg: BackgroundTasks):
+        """Long requests run in the background (phones drop a request that takes minutes); poll /tasks/{id}."""
+        if not body.message.strip():
+            raise HTTPException(422, "message is empty")
+        s = db()
+        client = claude()
+        import uuid
+        cid = body.conversation_id or uuid.uuid4().hex
+        task_id = s.create_task("assistant")
+
+        def work():
+            try:
+                s.finish_task(task_id, "ok", AI.chat(s, client, settings.assistant_model, toolbox(s, bg), body.message, cid))
+            except Exception as exc:
+                log.exception("assistant failed")
+                s.finish_task(task_id, "error", error=str(exc)[:300])
+        bg.add_task(work)
+        return {"task_id": task_id, "conversation_id": cid, "status": "running"}
 
     @app.get("/assistant/conversations/{conversation_id}", dependencies=A)
     def assistant_history(conversation_id: str):

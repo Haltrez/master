@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { Button, Card, cn } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, waitFor } from "@/lib/api";
 
 type Msg = { role: "user" | "assistant"; text: string };
 const KEY = "rr_assistant_conversation";
@@ -30,7 +30,11 @@ export function Assistant({ enabled }: { enabled: boolean }) {
     setMsgs((m) => [...m, { role: "user", text: message }]);
     setBusy(true);
     try {
-      const r = await api<any>("/assistant/chat", { body: { message, conversation_id: cid } });
+      const start = await api<any>("/assistant/start", { body: { message, conversation_id: cid } });
+      setCid(start.conversation_id);
+      const t = await waitFor<any>(`/tasks/${start.task_id}`, (x) => x.status !== "running", 2000, 10 * 60_000);
+      if (t.status !== "ok") throw new Error(t.error || "the assistant didn't finish");
+      const r = t.result;
       setCid(r.conversation_id);
       try { sessionStorage.setItem(KEY, r.conversation_id); } catch {}
       setMsgs((m) => [...m, { role: "assistant", text: r.reply }]);

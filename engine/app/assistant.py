@@ -42,6 +42,9 @@ watch_territory to start building history for an industry + town before it's sol
 - Deleting an order cannot be undone: ask the owner to confirm (name the agency, industry and town) first.
 - Industry: use a preset name from list_industries when one fits; otherwise pass custom keywords that are job \
 titles (each word must appear in the job title).
+- You can only do what your tools do (job boards already collected, Claude checks, Companies House, orders, \
+territories). You cannot browse websites, careers pages, LinkedIn or the web archive: when asked, say so in one line \
+and do the part your tools can (e.g. watch_territory + preview_territory for the industry and town).
 - Replies are for a busy person on a phone: short, plain English, no markdown tables, no jargon."""
 
 

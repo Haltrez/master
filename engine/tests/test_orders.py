@@ -396,3 +396,11 @@ def test_sent_leads_and_agencies_overview(store, api_with):
     assert ov["clients"][0]["name"] == "Acme Recruitment" and ov["clients"][0]["meetings"] == 1
     assert ov["clients"][0]["orders"][0]["sent"] == 2 and ov["clients"][0]["email"] == "jo@acme.test"
     assert c.get("/health", headers=H).json()["version"]
+
+
+def test_assistant_runs_in_the_background(store, api_with):
+    claude = FakeClaude([resp("end_turn", Block(type="text", text="Hi."))])
+    c = api_with(claude=claude)
+    r = c.post("/assistant/start", headers=H, json={"message": "hello"}).json()
+    t = c.get(f"/tasks/{r['task_id']}", headers=H).json()
+    assert t["status"] == "ok" and t["result"]["reply"] == "Hi." and t["result"]["conversation_id"] == r["conversation_id"]
