@@ -34,15 +34,16 @@ class CallCapExceeded(ReedError):
 class CallBudget:
     """Hard cap on API calls for one run, shared across all keywords."""
 
-    def __init__(self, max_calls: int):
+    def __init__(self, max_calls: int, source: str = "Reed", env: str = "REED_MAX_CALLS_PER_RUN"):
         self.max_calls = max_calls
         self.used = 0
+        self.source, self.env = source, env
 
     def take(self) -> None:
         if self.used >= self.max_calls:
             raise CallCapExceeded(
-                f"Reed API call cap reached ({self.max_calls} calls this run). "
-                "Raise REED_MAX_CALLS_PER_RUN or narrow the search."
+                f"{self.source} API call cap reached ({self.max_calls} calls this run). "
+                f"Raise {self.env} in .env (a search needs about one call per job title) or narrow the search."
             )
         self.used += 1
 

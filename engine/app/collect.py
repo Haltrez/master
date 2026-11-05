@@ -161,7 +161,7 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
     run_id = run_id or repo.create_run(search_id)
     result = RunResult(run_id=run_id, search_id=search_id, status="running")
     budget = CallBudget(settings.reed_max_calls_per_run)
-    adz_budget = CallBudget(settings.adzuna_max_calls_per_run)
+    adz_budget = CallBudget(settings.adzuna_max_calls_per_run, "Adzuna", "ADZUNA_MAX_CALLS_PER_RUN")
     pattern = agency_name_pattern(settings.agency_name_words)
     seen: dict[int, PostedBy] = {}
     log.info("run %d: search %d '%s' started", run_id, search_id, search.label)

@@ -71,7 +71,9 @@ class CareerjetClient:
                  min_interval: float = 1.0, sleep=time.sleep, clock=time.monotonic):
         if not api_key:
             raise ReedError("CAREERJET_API_KEY not set")
-        self._http = httpx.Client(transport=transport, timeout=30.0, headers={
+        # IPv4 only: Careerjet checks the caller against the whitelisted IPv4 address, and a server with IPv6
+        # would otherwise often connect over IPv6 and be refused (403).
+        self._http = httpx.Client(transport=transport or httpx.HTTPTransport(local_address="0.0.0.0"), timeout=30.0, headers={
             "Authorization": "Basic " + base64.b64encode(f"{api_key}:".encode()).decode()})
         self.user_ip = user_ip or "127.0.0.1"
         self.max_pages = max_pages
@@ -90,7 +92,8 @@ class CareerjetClient:
                 raise ReedError(f"Careerjet network error: {exc}") from exc
             log.info("careerjet kw=%r page=%d status=%d", keyword, page, r.status_code)
             if r.status_code in (401, 403):
-                raise ReedError(f"Careerjet refused the request ({r.status_code}): check CAREERJET_API_KEY / user_ip")
+                raise ReedError(f"Careerjet refused the request ({r.status_code}): {r.text[:120]}. Check CAREERJET_API_KEY "
+                                f"and that {self.user_ip} is whitelisted in your Careerjet account")
             if r.is_error:
                 raise ReedError(f"Careerjet returned {r.status_code}: {r.text[:200]}")
             body = r.json()
@@ -192,7 +195,7 @@ class ApifyIndeedClient:
     def _items(self, run_input: dict) -> list[dict]:
         r = self._http.post(f"{self.API}/acts/{self.actor}/runs", params={"waitForFinish": 60}, json=run_input)
         if r.status_code in (401, 403):
-            raise ReedError("Apify refused the token")
+            raise ReedError(f"Apify refused the request ({r.status_code}): {r.text[:160]}. Check APIFY_TOKEN in .env")
         if r.is_error:
             raise ReedError(f"Apify start failed {r.status_code}: {r.text[:200]}")
         run = r.json()["data"]
