@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Badge, Card, ErrorNote, PageHeader } from "@/components/ui";
 import { engineBase, engineOr } from "@/lib/engine";
 import { ago } from "@/lib/format";
@@ -12,7 +11,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const [health, s] = await Promise.all([engineOr<any>("/health", null), engineOr<any>("/settings", null)]);
   return (
     <>
-      <PageHeader title="Settings"><Link href="/settings/role-families">Role families →</Link></PageHeader>
+      <PageHeader title="Settings">
+        <form action="/api/logout" method="post"><button className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-700">Log out</button></form>
+      </PageHeader>
       {sp.google === "error" && <div className="mb-4"><ErrorNote error={`Google didn't connect: ${sp.reason || "try again"}`} /></div>}
       <div className="grid gap-4 lg:grid-cols-2">
         {s.data && <GoogleCard google={s.data.google} assistant={s.data.assistant} flash={sp.google} />}
