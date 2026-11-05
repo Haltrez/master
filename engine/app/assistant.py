@@ -31,7 +31,8 @@ companies and reports results back to the agency.
 
 How you work:
 - Do what is asked with the tools, straight away. Ask a short question only when a needed detail is missing \
-(agency name, industry, region or number of leads). Defaults: once (not weekly), package "sheet", radius 20 miles.
+(agency name, industry, region or number of leads). Defaults: once, package "sheet", radius 20 miles. "Every morning" / "daily" = frequency daily \
+(up to leads_wanted new leads each morning, ongoing).
 - An order runs in the background: collection takes about 5 minutes, then every candidate ad is read by Claude \
 Haiku (right industry, direct employer, real vacancy, agency-fillable), checked against the town's radius and \
 Companies House. Only leads passing everything go out, one row per company, so an order can start part-filled and \
@@ -62,7 +63,7 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _obj({
          "agency_name": S, "industry": {"type": "string", "description": "Preset name from list_industries, or free text"},
          "location": {"type": "string", "description": "UK town/city/region, e.g. 'Leeds'"},
-         "leads_wanted": I, "frequency": {"type": "string", "enum": ["once", "weekly"]},
+         "leads_wanted": I, "frequency": {"type": "string", "enum": ["once", "daily", "weekly"]},
          "package": {"type": "string", "enum": ["sheet", "outreach"]},
          "client_email": {"type": "string", "description": "Agency email to share the sheet with"},
          "keywords": {"type": "array", "items": S, "description": "Custom job-title keywords (overrides the preset)"},
@@ -78,7 +79,7 @@ TOOLS: list[dict[str, Any]] = [
      "input_schema": _obj({"order_id": I, "search_again": B}, ["order_id"])},
     {"name": "update_order", "strict": True,
      "description": "Change an order: number of leads, frequency, client email, or pause / resume it.",
-     "input_schema": _obj({"order_id": I, "leads_wanted": I, "frequency": {"type": "string", "enum": ["once", "weekly"]},
+     "input_schema": _obj({"order_id": I, "leads_wanted": I, "frequency": {"type": "string", "enum": ["once", "daily", "weekly"]},
                            "client_email": S, "paused": B}, ["order_id"])},
     {"name": "watch_territory", "strict": True,
      "description": "Start collecting an industry + town every morning before it's sold, so reposts build up and "

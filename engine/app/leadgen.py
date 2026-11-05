@@ -28,7 +28,7 @@ log = logging.getLogger("leadgen")
 
 ORDER_COLUMNS = ["Date added", "Company", "Role", "Also hiring", "Salary", "Times posted", "Posted on", "Location",
                  "Ad link", "Previous ad", "Why it's a lead", "Decision maker", "Their role", "Email",
-                 "Suggested email", "Status"]
+                 "Suggested email", "In your CRM", "Status"]
 STILL_HIRING_DAYS = 10
 CHUNK = 24
 MAX_JUDGED_PER_FILL = 400
@@ -159,12 +159,14 @@ def candidates(store, order: dict, now: dt.datetime) -> list[dict]:
 def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
          now: dt.datetime | None = None) -> tuple[list[dict], dict[str, int]]:
     """Up to `owed` rows (one per company), best first, plus counts of what was dropped and why."""
+    from .crm_lists import CrmIndex
     from .lead_contacts import enrich_lead_company, verify_lead_company
     now = now or dt.datetime.now(dt.timezone.utc)
+    crm = CrmIndex(store, order.get("agency_id"))
     search = store.search_row(order["search_id"]) or {}
     industry = IND.definition(order["industry"], list(search.get("keywords") or []))
     stats = {"candidates": 0, "outside_area": 0, "judged": 0, "not_judged": 0, "failed_haiku": 0,
-             "failed_company_check": 0}
+             "failed_company_check": 0, "in_crm": 0}
     from .geo import search_area
     town, radius = search_area(search.get("location") or order.get("location"),
                                search.get("radius_miles") or order.get("radius_miles") or 20)
@@ -189,6 +191,10 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
         return miles_between(center, here) <= radius * AREA_SLACK
     cands = candidates(store, order, now)
     stats["candidates"] = len(cands)
+    if crm and crm.mode == "exclude":       # their own clients never cost a Haiku call
+        before = len(cands)
+        cands = [l for l in cands if crm.match(l["employer_norm"]) is None]
+        stats["in_crm"] += before - len(cands)
     good: dict[str, list[tuple[dict, Verdict, dict]]] = {}     # employer_norm -> passing roles
     bad_company: set[str] = set()
     contacts: dict[str, dict] = {}
@@ -215,6 +221,10 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
         if not (c and c.get("verified_company")):
             bad_company.add(norm)
             stats["failed_company_check"] += 1
+            return False
+        if crm and crm.mode == "exclude" and crm.match(norm, c) is not None:   # same company by number/website
+            bad_company.add(norm)
+            stats["in_crm"] += 1
             return False
         return True
 
@@ -279,7 +289,13 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
             except Exception as exc:
                 log.warning("decision maker for %s failed: %s", lead["employer_name"], exc)
         others = sorted({v.role for _, v, _ in items if v.role.lower() != verdict.role.lower()})
-        rows.append(build_row(store, order, lead, verdict, ad, others, c, now))
+        if crm and crm.mode == "exclude" and crm.match(norm, c) is not None:   # website found by the lookup
+            stats["in_crm"] += 1
+            continue
+        row = build_row(store, order, lead, verdict, ad, others, c, now)
+        owner = crm.match(norm, c) if crm else None
+        row["In your CRM"] = "" if owner is None else (f"Yes, owner: {owner}" if owner else "Yes")
+        rows.append(row)
     log.info("order %s: %s -> %d rows", order["id"], stats, len(rows))
     return rows, stats
 

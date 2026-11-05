@@ -55,7 +55,7 @@ export function Orders({ initial, industries, google }: { initial: any[]; indust
 function OrderRow({ o, onChange }: { o: any; onChange: () => void }) {
   const [err, setErr] = useState<string>();
   const [working, setWorking] = useState(false);
-  const sent = o.frequency === "weekly" ? o.delivered_period : o.delivered_total;
+  const sent = o.frequency === "once" ? o.delivered_total : o.delivered_period;
   async function act(fn: () => Promise<any>) {
     setErr(undefined); setWorking(true);
     try { await fn(); onChange(); } catch (e: any) { setErr(e.message); } finally { setWorking(false); }
@@ -66,7 +66,7 @@ function OrderRow({ o, onChange }: { o: any; onChange: () => void }) {
         <div className="min-w-0">
           <p className="font-medium">{o.agency_name} <span className="font-normal text-slate-500">· {o.industry} · {o.location}</span></p>
           <p className="text-xs text-slate-500">
-            {o.frequency === "weekly" ? `${o.leads_wanted} a week` : `${o.leads_wanted} leads`}
+            {o.frequency === "weekly" ? `${o.leads_wanted} a week` : o.frequency === "daily" ? `${o.leads_wanted} every morning` : `${o.leads_wanted} leads`}
             {" · "}{o.package === "outreach" ? "sheet + outreach" : "sheet"}
             {o.client_email && <> · {o.client_email}</>}
             {o.last_run_at && <> · updated {ago(o.last_run_at)}</>}
@@ -113,6 +113,7 @@ function OrderRow({ o, onChange }: { o: any; onChange: () => void }) {
 function OrderForm({ industries, onDone, onCancel }: { industries: any[]; onDone: () => void; onCancel?: () => void }) {
   const [industry, setIndustry] = useState(industries[0]?.name || "");
   const [custom, setCustom] = useState("");
+  const [crm, setCrm] = useState("");
   const [err, setErr] = useState<string>();
   const [busy, setBusy] = useState(false);
   const preset = industries.find((i) => i.name === industry);
@@ -127,7 +128,8 @@ function OrderForm({ industries, onDone, onCancel }: { industries: any[]; onDone
         agency_name: f.get("agency_name"), client_email: String(f.get("client_email") || "") || null,
         industry: industry === "__other" ? custom : industry, location: f.get("location"),
         radius_miles: Number(f.get("radius_miles")), leads_wanted: Number(f.get("leads_wanted")),
-        frequency: f.get("frequency"), package: f.get("package"), keywords: keywords.length ? keywords : null } });
+        frequency: f.get("frequency"), package: f.get("package"), keywords: keywords.length ? keywords : null,
+        crm_csv: crm || null, crm_mode: f.get("crm_mode") } });
       onDone();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
@@ -157,9 +159,19 @@ function OrderForm({ industries, onDone, onCancel }: { industries: any[]; onDone
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div><Label htmlFor="frequency">How often</Label>
-          <Select id="frequency" name="frequency" defaultValue="once"><option value="once">Once</option><option value="weekly">Every week</option></Select></div>
+          <Select id="frequency" name="frequency" defaultValue="once"><option value="once">Once (fill up to the number)</option>
+            <option value="daily">Every morning (that many a day)</option><option value="weekly">Every week (that many a week)</option></Select></div>
         <div><Label htmlFor="package">Package</Label>
           <Select id="package" name="package" defaultValue="sheet"><option value="sheet">Sheet only</option><option value="outreach">Sheet + I do outreach</option></Select></div>
+      </div>
+      <div className="sm:col-span-2 grid gap-3 sm:grid-cols-2">
+        <div><Label htmlFor="crm_file">Their CRM export (optional, CSV)</Label>
+          <input id="crm_file" type="file" accept=".csv,text/csv" className="block w-full text-sm"
+            onChange={async (e) => setCrm(e.target.files?.[0] ? await e.target.files[0].text() : "")} />
+          <p className="mt-1 text-xs text-slate-500">Their companies/clients list (Excel: Save as CSV). Leads they already have are checked by name, website and company number.</p></div>
+        <div><Label htmlFor="crm_mode">Companies already in their CRM</Label>
+          <Select id="crm_mode" name="crm_mode" defaultValue="exclude"><option value="exclude">Leave them out</option>
+            <option value="flag">Send them, marked with the owner</option></Select></div>
       </div>
       <details className="sm:col-span-2 text-sm">
         <summary className="cursor-pointer text-slate-500">Custom job titles (optional)</summary>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Badge, Card, Empty, ErrorNote, PageHeader } from "@/components/ui";
 import { engineOr } from "@/lib/engine";
+import { CrmList } from "./crm-list";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export default async function AgenciesPage() {
                   <p className="font-medium">{a.name} {a.email && <span className="font-normal text-slate-500">· {a.email}</span>}</p>
                   <p className="text-xs text-slate-500">{a.leads_sent} leads sent · {a.contacted} contacted · {a.meetings} meetings · {a.placements} placements</p>
                 </div>
+                <CrmList agency={a} />
                 <ul className="mt-1 space-y-0.5 text-xs">
                   {a.orders.map((o: any) => (
                     <li key={o.id}>

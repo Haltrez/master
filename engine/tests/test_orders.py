@@ -83,7 +83,7 @@ def test_custom_keywords_and_validation(store):
     with pytest.raises(ValueError):
         make(store, leads_wanted=0)
     with pytest.raises(ValueError):
-        make(store, frequency="daily")
+        make(store, frequency="hourly")
 
 
 def test_fill_sends_only_verified_up_to_the_number_and_never_twice(store):
@@ -96,7 +96,7 @@ def test_fill_sends_only_verified_up_to_the_number_and_never_twice(store):
     assert r["sent"] == 3 and r["status"] == "done"
     assert sheets.shared == ["jo@acme.test"] and len(sheets.created) == 1
     assert [row[1] for row in sheets.rows] == ["Company 3", "Company 2", "Company 1"]   # best score first
-    assert sheets.rows[0][-1] == "new" and len(sheets.rows[0]) == len(O.SHEET_HEADERS) == 16
+    assert sheets.rows[0][-1] == "new" and len(sheets.rows[0]) == len(O.SHEET_HEADERS) == 17
     got = O.get_order(store, o["id"])
     assert got["delivered_total"] == 3 and got["sheet_url"].endswith("/edit")
     # raising the number sends only the rest; unverified companies never go out
@@ -404,3 +404,47 @@ def test_assistant_runs_in_the_background(store, api_with):
     r = c.post("/assistant/start", headers=H, json={"message": "hello"}).json()
     t = c.get(f"/tasks/{r['task_id']}", headers=H).json()
     assert t["status"] == "ok" and t["result"]["reply"] == "Hi." and t["result"]["conversation_id"] == r["conversation_id"]
+
+
+def test_daily_orders_send_a_new_batch_each_uk_morning(store):
+    o = make(store, leads_wanted=2, frequency="daily")
+    add_leads(store, 6, label="IT & Tech - Leeds")
+    assert O.fill_order(store, Settings(), o["id"])["sent"] == 2
+    assert O.fill_order(store, Settings(), o["id"])["sent"] == 0          # same day: nothing more
+    tomorrow = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+    r = O.fill_order(store, Settings(), o["id"], now=tomorrow)
+    assert r["sent"] == 2 and "sent today" in r["note"]
+
+
+CRM_CSV = "Company Name,Website,Owner\nCompany 3,company3.co.uk,Sarah\nCompany 9,,Tom\n"
+
+
+def test_crm_list_leaves_out_or_marks_their_existing_clients(store, api_with):
+    from app import crm_lists
+    c = api_with()
+    r = c.post("/orders", headers=H, json={"agency_name": "Acme", "industry": "IT & Tech", "location": "Leeds", "leads_wanted": 10,
+                                           "crm_csv": CRM_CSV, "crm_mode": "exclude"})
+    assert r.status_code == 201 and r.json()["crm_list"]["companies"] == 2
+    o = r.json()
+    add_leads(store, 4, label="IT & Tech - Leeds")
+    res = O.fill_order(store, Settings(), o["id"])
+    assert res["sent"] == 3 and "already in their CRM" in res["note"]
+    assert "Company 3" not in [x["Company"] for x in O.order_lead_rows(store, o["id"])]
+    # flag mode: sent, marked with the owner
+    crm_lists.set_mode(store, o["agency_id"], "flag")
+    O.update_order(store, o["id"], {"leads_wanted": 20, "status": "waiting"})
+    O.fill_order(store, Settings(), o["id"])
+    rows = {x["Company"]: x for x in O.order_lead_rows(store, o["id"])}
+    assert rows["Company 3"]["In your CRM"] == "Yes, owner: Sarah" and rows["Company 1"]["In your CRM"] == ""
+    assert c.get(f"/agencies/{o['agency_id']}/crm-list", headers=H).json()["mode"] == "flag"
+
+
+def test_crm_list_parsing_finds_columns_by_header():
+    from app.crm_lists import domain_of, parse
+    rows, cols = parse("Client Company Name;Web Site;Account Owner;Company Reg\nHarlow Group Ltd;https://www.harlow.co.uk/about;Amy;123456\n")
+    assert cols == {"name": "Client Company Name", "domain": "Web Site", "number": "Company Reg", "owner": "Account Owner"}
+    assert rows[0]["domain"] == "harlow.co.uk" and rows[0]["ch_number"] == "00123456" and rows[0]["owner"] == "Amy"
+    assert domain_of("jo@acme.co.uk") == "acme.co.uk"
+    import pytest
+    with pytest.raises(ValueError):
+        parse("Foo,Bar\n1,2\n")

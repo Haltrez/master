@@ -64,7 +64,7 @@ TABLES = ("deliveries", "client_territories", "clients", "activities", "contacts
           "hot_lead_searches", "hot_leads", "employer_overrides", "listing_searches", "listings", "runs", "searches",
           "templates", "brief_matches", "candidate_briefs", "employer_jobs", "employers", "role_families",
           "http_cache", "suppression_list", "app_settings", "tasks", "app_users", "lead_contacts", "archive_evidence",
-          "lead_orders", "assistant_messages", "projects")
+          "lead_orders", "assistant_messages", "projects", "agency_crm_companies")
 
 
 @pytest.fixture

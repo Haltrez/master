@@ -258,7 +258,18 @@ class AgencyIn(BaseModel):
     website: str | None = None
 
 
+class CrmListIn(BaseModel):
+    csv: str
+    mode: str | None = None      # exclude | flag
+
+
+class CrmModeIn(BaseModel):
+    mode: str
+
+
 class OrderIn(BaseModel):
+    crm_csv: str | None = None   # the agency's CRM export, checked before the first leads go out
+    crm_mode: str | None = None
     agency_name: str
     industry: str
     location: str
@@ -320,7 +331,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.6"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.7"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1072,9 +1083,52 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     @app.post("/orders", dependencies=A, status_code=201)
     def create_order_ep(body: OrderIn, bg: BackgroundTasks):
-        o = new_order(body.model_dump())
+        from . import crm_lists
+        if body.crm_mode and body.crm_mode not in crm_lists.MODES:
+            raise HTTPException(422, f"crm_mode must be one of {crm_lists.MODES}")
+        if body.crm_csv:
+            try:
+                crm_lists.parse(body.crm_csv)
+            except ValueError as exc:
+                raise HTTPException(422, f"CRM list: {exc}")
+        o = new_order(body.model_dump(exclude={"crm_csv", "crm_mode"}))
+        if body.crm_csv:
+            o["crm_list"] = crm_lists.replace_list(db(), o["agency_id"], body.crm_csv, body.crm_mode)
+        elif body.crm_mode:
+            crm_lists.set_mode(db(), o["agency_id"], body.crm_mode)
         bg.add_task(fill, o["id"], True)
         return o
+
+    @app.get("/agencies/{agency_id}/crm-list", dependencies=A)
+    def crm_list_ep(agency_id: int):
+        from . import crm_lists
+        db().get_agency(agency_id) or notfound("agency")
+        return crm_lists.summary(db(), agency_id)
+
+    @app.put("/agencies/{agency_id}/crm-list", dependencies=A)
+    def crm_list_upload(agency_id: int, body: CrmListIn):
+        from . import crm_lists
+        db().get_agency(agency_id) or notfound("agency")
+        try:
+            return crm_lists.replace_list(db(), agency_id, body.csv, body.mode)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+
+    @app.patch("/agencies/{agency_id}/crm-list", dependencies=A)
+    def crm_list_mode(agency_id: int, body: CrmModeIn):
+        from . import crm_lists
+        db().get_agency(agency_id) or notfound("agency")
+        try:
+            crm_lists.set_mode(db(), agency_id, body.mode)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return crm_lists.summary(db(), agency_id)
+
+    @app.delete("/agencies/{agency_id}/crm-list", dependencies=A)
+    def crm_list_clear(agency_id: int):
+        from . import crm_lists
+        crm_lists.clear(db(), agency_id)
+        return crm_lists.summary(db(), agency_id)
 
     @app.get("/orders/{order_id}", dependencies=A)
     def order_ep(order_id: int):

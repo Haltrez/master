@@ -110,6 +110,10 @@ try {
   await page.goto(BASE + "/agencies");
   await page.waitForSelector("text=Your clients (1)");
   check(await page.locator("text=1 meetings").count() === 1, "agency shows its orders and results");
+  await page.setInputFiles("input[aria-label='CRM list for Rival Recruitment']",
+    { name: "crm.csv", mimeType: "text/csv", buffer: Buffer.from("Company Name,Owner\nHarlow Group Ltd,Sarah\nAcme Ltd,Tom\n") });
+  await page.waitForSelector("text=2 companies loaded, 2 with an owner");
+  check(true, "agency CRM export uploads and is read by its headers");
   check((await page.locator("[data-testid=version]").innerText()).startsWith("Version"), "version is shown");
   await page.goto(BASE + "/");
   await page.selectOption("select[aria-label='Territory industry']", "IT & Tech");

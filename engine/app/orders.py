@@ -23,7 +23,7 @@ from .leadgen import ORDER_COLUMNS, Tools, candidates, pick
 
 INDUSTRIES = {k: v["search"] for k, v in IND.INDUSTRIES.items()}   # name -> job titles searched
 SHEET_HEADERS = ORDER_COLUMNS
-FREQUENCIES = ("once", "weekly")
+FREQUENCIES = ("once", "daily", "weekly")
 PACKAGES = ("sheet", "outreach")
 
 
@@ -168,6 +168,17 @@ def _set(store, order_id: int, **fields) -> None:
     store._update("lead_orders", order_id, fields)
 
 
+def _new_period(o: dict, now: dt.datetime) -> bool:
+    """Daily orders start a new batch each UK morning; weekly ones every 7 days."""
+    if o["frequency"] == "weekly":
+        return now - o["period_start"] >= dt.timedelta(days=7)
+    if o["frequency"] == "daily":
+        from zoneinfo import ZoneInfo
+        uk = ZoneInfo("Europe/London")
+        return now.astimezone(uk).date() > o["period_start"].astimezone(uk).date()
+    return False
+
+
 def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, int], Any] | None = None,
                sheets=None, strict: bool = True, now: dt.datetime | None = None, claude=None,
                tools: Tools | None = None) -> dict[str, Any]:
@@ -183,10 +194,10 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
         if collect is not None and o.get("search_id"):
             _set(store, order_id, status="collecting", note="Searching every job board...")
             collect(store, settings, o["search_id"])
-        if o["frequency"] == "weekly" and now - o["period_start"] >= dt.timedelta(days=7):
+        if _new_period(o, now):
             _set(store, order_id, period_start=now)
         o = get_order(store, order_id)
-        owed = int(o["leads_wanted"]) - int(o["delivered_period"] if o["frequency"] == "weekly" else o["delivered_total"])
+        owed = int(o["leads_wanted"]) - int(o["delivered_period"] if o["frequency"] != "once" else o["delivered_total"])
         sent, stats = 0, {}
         if owed > 0 and o.get("client_id"):
             _set(store, order_id, note="Checking each ad with Claude and Companies House...")
@@ -213,21 +224,26 @@ def fill_order(store, settings, order_id: int, *, collect: Callable[[Any, Any, i
                             (o["client_id"], r["lead_key"], order_id, Jsonb({k: v for k, v in r.items() if k != "lead_key"})))
             sent = len(rows)
         o = get_order(store, order_id)
-        have = int(o["delivered_period"] if o["frequency"] == "weekly" else o["delivered_total"])
+        have = int(o["delivered_period"] if o["frequency"] != "once" else o["delivered_total"])
         where = "" if sheets is not None else " Google isn't connected: download the CSV."
         if have >= o["leads_wanted"]:
             if o["frequency"] == "once":
                 status, note = "done", f"All {have} leads sent.{where}"
+            elif o["frequency"] == "daily":
+                status, note = "waiting", f"{have} sent today. More tomorrow morning.{where}"
             else:
                 nxt = (o["period_start"] + dt.timedelta(days=7)).date()
                 status, note = "waiting", f"{have} sent this week. Next batch from {nxt:%a %d %b}.{where}"
         else:
             status = "waiting"
             checked = ""
+            if stats.get("in_crm"):
+                checked += f" {stats['in_crm']} left out: already in their CRM."
             if stats.get("judged"):
-                checked = (f" Checked {stats['judged']} reposted ads: {stats['failed_haiku']} were the wrong kind of job"
+                checked += (f" Checked {stats['judged']} reposted ads: {stats['failed_haiku']} were the wrong kind of job"
                            f" and {stats['failed_company_check']} failed the company check.")
-            note = (f"{have} of {o['leads_wanted']} sent.{checked} New reposts are checked every morning.{where}")
+            period = {"daily": " today", "weekly": " this week"}.get(o["frequency"], "")
+            note = (f"{have} of {o['leads_wanted']} sent{period}.{checked} New reposts are checked every morning.{where}")
         _set(store, order_id, status=status, note=note, last_run_at=now)
         return {"order_id": order_id, "sent": sent, "status": status, "note": note, "sheet_url": o.get("sheet_url"),
                 "stats": stats}
@@ -318,7 +334,9 @@ def sent_leads(store, order_id: int | None = None) -> list[dict]:
 
 def agencies_overview(store) -> dict:
     clients = store.q("""
-        select a.id, a.name, a.website,
+        select a.id, a.name, a.website, a.crm_match_mode,
+          (select count(*) from agency_crm_companies k where k.agency_id = a.id) as crm_companies,
+          (select max(k.uploaded_at) from agency_crm_companies k where k.agency_id = a.id) as crm_uploaded_at,
           (select max(o.client_email) from lead_orders o where o.agency_id = a.id) as email,
           coalesce((select json_agg(json_build_object('id', o.id, 'industry', o.industry, 'location', o.location,
                      'status', o.status, 'leads_wanted', o.leads_wanted, 'frequency', o.frequency, 'package', o.package,
