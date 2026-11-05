@@ -93,4 +93,6 @@ def test_excel_downloads(store):
     wb = load_workbook(io.BytesIO(r.content))
     ws = wb["Leads"]
     assert [c.value for c in ws[1]] == SUBMIT["columns"] and ws["B2"].value == "DL M&E"
-    assert ws["C2"].hyperlink.target == "https://x/1" and ws.freeze_panes and wb["Note"]["A1"].value == "thin"
+    assert ws["C2"].hyperlink.target == "https://x/1" and ws.freeze_panes and wb.sheetnames == ["Leads"]   # client copy
+    full = load_workbook(io.BytesIO(c.get(f"/projects/{pid}/result.xlsx?notes=true", headers=H).content))
+    assert full["Note (private)"]["A1"].value == "thin" and "Email" in full.sheetnames

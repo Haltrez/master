@@ -331,7 +331,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.8"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.9"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1360,16 +1360,18 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
                         headers={"Content-Disposition": f"attachment; filename={name}.csv"})
 
     @app.get("/projects/{project_id}/result.xlsx", dependencies=A)
-    def project_xlsx(project_id: int):
+    def project_xlsx(project_id: int, notes: bool = False):
+        """Client version by default (leads + summary only). notes=true adds the email and the private note."""
         from .xlsx_export import workbook
         p = P.get(db(), project_id) or notfound("project")
         r = p.get("result") or notfound("results")
         email = (f"Subject: {r.get('email_subject')}\n\n" if r.get("email_subject") else "") + (r.get("email_body") or "")
         name = "".join(ch if ch.isalnum() else "-" for ch in p["title"][:50]).strip("-").lower() or f"project-{project_id}"
         return Response(content=workbook(r.get("columns") or [], r.get("rows") or [], title="Leads",
-                                         summary=r.get("summary_lines"), extra_sheets={"Email": email, "Note": r.get("note")}),
+                                         summary=r.get("summary_lines"),
+                                         extra_sheets={"Email": email, "Note (private)": r.get("note")} if notes else None),
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        headers={"Content-Disposition": f"attachment; filename={name}.xlsx"})
+                        headers={"Content-Disposition": f"attachment; filename={name}{'-with-notes' if notes else ''}.xlsx"})
 
     @app.get("/assistant/conversations/{conversation_id}", dependencies=A)
     def assistant_history(conversation_id: str):
