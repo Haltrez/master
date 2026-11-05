@@ -133,3 +133,16 @@ def test_project_cost_is_recorded_from_usage(store):
     one = cost_of("claude-opus-5-5", 1000, 5000, 100_000, 2000)
     assert abs(float(p["cost_usd"]) - 2 * one) < 0.0001 and p["cache_read_tokens"] == 200_000
     assert round(one, 4) == round((1000 * 4 + 5000 * 5 + 100_000 * 0.2 + 2000 * 20) / 1e6, 4)
+
+
+def test_house_style_is_given_to_new_projects(store):
+    sub = {**SUBMIT, "header_lines": ["DL M&E says no agencies."]}
+    c, claude, _ = app_with(store, [
+        resp("tool_use", Block(type="tool_use", id="t1", name="submit_results", input=sub)), resp("end_turn", Block(type="text", text="Done.")),
+        resp("end_turn", Block(type="text", text="I can't."))])
+    pid = c.post("/projects", headers=H, json={"brief": BRIEF}).json()["id"]
+    st = c.post(f"/projects/{pid}/use-as-style", headers=H).json()
+    assert st["header_lines"] == ["DL M&E says no agencies."] and c.get("/projects-style", headers=H).json()["from_project"] == pid
+    c.post("/projects", headers=H, json={"brief": BRIEF + " Second one."})
+    first_msg = claude.requests[2][0]["content"][0]["text"]
+    assert "HOUSE STYLE" in first_msg and "DL M&E says no agencies." in first_msg

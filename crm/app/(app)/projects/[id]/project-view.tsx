@@ -12,6 +12,7 @@ export function ProjectView({ initial }: { initial: any }) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState<string>();
   const [copied, setCopied] = useState(false);
+  const [styled, setStyled] = useState(false);
   const running = p.status === "running" || p.status === "queued";
   useEffect(() => {
     if (!running) return;
@@ -29,6 +30,11 @@ export function ProjectView({ initial }: { initial: any }) {
       <PageHeader title={p.title}>
         <Badge tone={TONE[p.status]}>{p.status}</Badge>
         {running && <Button size="sm" variant="ghost" onClick={async () => setP(await api(`/projects/${p.id}/cancel`, { method: "POST" }))}>Cancel</Button>}
+        {r && !running && (
+          <Button size="sm" variant="secondary" title="Every new project will match this one's style"
+            onClick={async () => { try { await api(`/projects/${p.id}/use-as-style`, { method: "POST" }); setStyled(true); } catch (e: any) { setErr(e.message); } }}>
+            {styled ? "House style saved ✓" : "Use as house style"}</Button>
+        )}
         <Link href="/projects" className="text-sm">All projects</Link>
       </PageHeader>
       {p.error && <div className="mb-3"><ErrorNote error={p.error} /></div>}

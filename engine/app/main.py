@@ -331,7 +331,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.12"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-05.13"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1341,6 +1341,17 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
             raise HTTPException(409, "the project is still running: wait for it, or cancel it first")
         start_project(project_id, body.message.strip() or "Carry on where you stopped and submit the results.")
         return P.get(s, project_id)
+
+    @app.post("/projects/{project_id}/use-as-style", dependencies=A)
+    def project_style(project_id: int):
+        try:
+            return P.save_style(db(), project_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @app.get("/projects-style", dependencies=A)
+    def project_style_get():
+        return db().setting(P.STYLE_SETTING) or {}
 
     @app.post("/projects/{project_id}/cancel", dependencies=A)
     def project_cancel(project_id: int):

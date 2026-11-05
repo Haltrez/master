@@ -286,6 +286,35 @@ def _call(client, **kw):
         return s.get_final_message()
 
 
+STYLE_SETTING = "project_house_style"
+
+
+def save_style(store, pid: int) -> dict:
+    """Make this project's deliverables the example every new project matches (Roberts approved it)."""
+    p = get(store, pid)
+    r = (p or {}).get("result")
+    if not r:
+        raise ValueError("this project has no results yet")
+    style = {"from_project": pid, "title": p["title"], "columns": r.get("columns"), "header_lines": r.get("header_lines"),
+             "example_rows": (r.get("rows") or [])[:3], "summary_lines": (r.get("summary_lines") or [])[:3],
+             "email_subject": r.get("email_subject"), "email_body": r.get("email_body"),
+             "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")}
+    store.set_setting(STYLE_SETTING, style)
+    return style
+
+
+def _style_text(store) -> str:
+    st = store.setting(STYLE_SETTING)
+    if not st:
+        return ""
+    return ("\n\nHOUSE STYLE: Roberts approved the deliverables below (from an earlier project). Match their style: the "
+            "same kind of columns (adapted to this brief's requested columns), header lines written the same honest, "
+            "specific way, one-line client notes like these, the Agency-friendly? wording, market-demand lines like "
+            "these, and an email in the same tone and length. The facts here are from another client and must not be "
+            "reused.\n" + json.dumps({k: st.get(k) for k in ("columns", "header_lines", "example_rows", "summary_lines",
+                                                         "email_subject", "email_body")}, ensure_ascii=False))
+
+
 def run(store, client, model: str, research, pid: int, message: str | None = None) -> dict:
     """Run (or continue, with a follow-up message) a project until it submits or runs out of steps."""
     from .assistant import _append, _block_dict, load
@@ -293,7 +322,7 @@ def run(store, client, model: str, research, pid: int, message: str | None = Non
     cid = f"project:{pid}"
     messages = load(store, cid)
     first = not messages
-    text = (f"Project brief:\n\n{p['brief']}\n\nToday is {dt.date.today():%A %d %B %Y}." if first
+    text = (f"Project brief:\n\n{p['brief']}\n\nToday is {dt.date.today():%A %d %B %Y}.{_style_text(store)}" if first
             else (message or "Carry on."))
     user = {"role": "user", "content": [{"type": "text", "text": text}]}
     messages.append(user)
