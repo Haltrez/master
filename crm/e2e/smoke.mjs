@@ -127,6 +127,8 @@ try {
   await page.waitForSelector("text=E2E founders");
   await page.waitForSelector("[data-testid=outreach-stats] >> text=40 / 40");
   check(true, "outreach page shows Smartlead campaigns and stats");
+  await page.waitForSelector("[data-testid=personalise-summary] >> text=Founders & managers");
+  check(true, "outreach page shows how many campaign leads are personalised");
   await page.click("button:has-text('Pause')");
   await page.waitForSelector("button:has-text('Resume')");
   check(true, "a campaign can be paused and resumed from the CRM");

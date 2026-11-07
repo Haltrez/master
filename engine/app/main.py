@@ -350,7 +350,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-05.17"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-07.1"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1429,6 +1429,44 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
             s.set_setting(keys[k], v)
         s.q("delete from http_cache where key = 'outreach:stats'")
         return outreach_settings_get()
+
+    # -- personalising the leads already in the Smartlead campaigns ------------------------------------
+    from . import personalise as PZ
+
+    @app.get("/outreach/personalise", dependencies=A)
+    def personalise_summary():
+        return PZ.summary(db())
+
+    @app.post("/outreach/personalise/run", dependencies=A, status_code=202)
+    def personalise_run(bg: BackgroundTasks, dry_run: bool = False):
+        """Sync both campaigns' leads, check each agency and its niche, write the hot leads. Takes a while: poll GET."""
+        s = db()
+        sl = smartlead()
+        tools = order_tools(s)
+        task_id = s.create_task("personalise")
+
+        def work():
+            try:
+                s.finish_task(task_id, "ok", PZ.run(s, settings, sl, client=tools.claude, geocoder=tools.geocoder,
+                                                    ch=tools.ch, dry_run=dry_run))
+            except Exception as exc:
+                log.exception("personalise failed")
+                s.finish_task(task_id, "error", error=str(exc)[:300])
+        bg.add_task(work)
+        return {"task_id": task_id, "status": "running"}
+
+    @app.get("/outreach/personalise/leads", dependencies=A)
+    def personalise_leads(state: str | None = None, limit: int = 200):
+        return PZ.leads(db(), state, min(limit, 2000))
+
+    @app.get("/outreach/personalise/held.csv", dependencies=A)
+    def personalise_held_csv():
+        return Response(PZ.held_csv(db()), media_type="text/csv",
+                        headers={"Content-Disposition": 'attachment; filename="leads-to-remove.csv"'})
+
+    @app.get("/outreach/personalise/{campaign_id}/{lead_id}/preview", dependencies=A)
+    def personalise_preview(campaign_id: int, lead_id: int):
+        return sl_call(PZ.preview, db(), smartlead(), campaign_id, lead_id)
 
     @app.post("/outreach/import-contacts", dependencies=A)
     def outreach_import_contacts(body: ProspectsIn):

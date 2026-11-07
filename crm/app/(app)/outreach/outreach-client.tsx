@@ -3,7 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Modal } from "@/components/modal";
 import { Badge, Button, Card, Empty, ErrorNote, cn } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, waitFor } from "@/lib/api";
 import { ago } from "@/lib/format";
 
 const pct = (v: number) => `${((v || 0) * 100).toFixed(1)}%`;
@@ -16,6 +16,7 @@ export function OutreachClient({ settings }: { settings: any }) {
   return (
     <div className="space-y-4">
       <Stats />
+      <Personalise />
       <Queue settings={settings} />
       <Replies />
       <Campaigns />
@@ -229,6 +230,84 @@ function Campaigns() {
           </tbody>
         </table></div>
       )}
+    </Card>
+  );
+}
+
+function Personalise() {
+  const sum = useLoad<any>("/outreach/personalise");
+  const [state, setState] = useState("filled");
+  const list = useLoad<any[]>(`/outreach/personalise/leads?state=${state}&limit=100`);
+  const [running, setRunning] = useState(false);
+  const [err, setErr] = useState<string>();
+  const [pv, setPv] = useState<any>(null);
+  async function run() {
+    setRunning(true); setErr(undefined);
+    try {
+      const { task_id } = await api<any>("/outreach/personalise/run", { method: "POST" });
+      const t = await waitFor<any>(`/tasks/${task_id}`, (x) => x.status !== "running", 4000, 90 * 60_000);
+      if (t.status === "error") setErr(t.error);
+      sum.load(); list.load();
+    } catch (e: any) { setErr(e.message); } finally { setRunning(false); }
+  }
+  const by = sum.data?.by_campaign || {};
+  const n = (r: string, k: string) => by[r]?.[k] || 0;
+  const total = (r: string) => Object.values(by[r] || {}).reduce((a: number, b: any) => a + Number(b), 0);
+  const last = sum.data?.last_run;
+  return (
+    <Card title="Campaign leads: personalised by the engine"
+      action={<Button size="sm" onClick={run} disabled={running}>{running ? "Working… (can take 30+ min the first time)" : "Sync & fill now"}</Button>}>
+      <p className="text-sm text-slate-600 dark:text-slate-400">Reads the leads in your two Smartlead campaigns, checks each agency's website for its niche,
+        and writes 3 real hot leads near their town into the email variables. Runs by itself every morning at 07:00; leads already emailed keep theirs.</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2" data-testid="personalise-summary">
+        {["leaders", "sales"].map((r) => (
+          <div key={r} className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+            <p className="font-medium">{ROLE[r]}</p>
+            <p><b className="text-green-700 dark:text-green-400">{n(r, "filled")}</b> of {total(r)} ready ·{" "}
+              <span className={n(r, "held") ? "text-red-600" : ""}>{n(r, "held")} held</span>{n(r, "new") ? ` · ${n(r, "new")} not checked yet` : ""}</p>
+          </div>))}
+      </div>
+      {(sum.data?.held_reasons || []).length > 0 && (
+        <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-800 dark:bg-red-950 dark:text-red-200">
+          <p className="font-medium">Held leads would get an email with blanks. Remove them in Smartlead before you press Start:</p>
+          <ul className="mt-1 list-disc pl-5">{sum.data.held_reasons.map((h: any) => <li key={h.reason}>{h.n} · {h.reason}</li>)}</ul>
+          <a href="/api/engine/outreach/personalise/held.csv" className="mt-1 inline-block font-medium">Download the list of held emails (CSV)</a>
+          <p className="mt-1 text-xs">"Only N hot leads" ones fill by themselves once collection finds more; run this again in a few days.</p>
+        </div>)}
+      {last && <p className="mt-2 text-xs text-slate-500">Last run {ago(last.at)}: {last.filled} filled, {last.unchanged} unchanged,
+        {" "}{last.kept_in_sequence} already in the sequence, {last.held} held{last.errors?.length ? `, ${last.errors.length} errors` : ""}.</p>}
+      <ErrorNote error={err || sum.err} />
+      <div className="mt-3 flex gap-2 text-sm">
+        {["filled", "held"].map((s) => <button key={s} className={cn("rounded-lg px-2 py-1", state === s ? "bg-slate-200 dark:bg-slate-800" : "text-brand")}
+          onClick={() => setState(s)}>{s === "filled" ? "Ready" : "Held"}</button>)}
+      </div>
+      <div className="mt-2 max-h-96 overflow-auto">
+        <table className="w-full text-xs">
+          <thead className="text-left uppercase tracking-wide text-slate-500"><tr><th className="py-1.5 pr-2">Agency</th><th className="pr-2">Person</th>
+            <th className="pr-2">Niche · City</th><th className="pr-2">{state === "held" ? "Why held" : "Lead 1 · 2 · 3"}</th></tr></thead>
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+            {(list.data || []).map((l: any) => (
+              <tr key={`${l.campaign_id}-${l.lead_id}`} className="cursor-pointer align-top hover:bg-slate-50 dark:hover:bg-slate-900"
+                onClick={async () => { try { setPv(await api(`/outreach/personalise/${l.campaign_id}/${l.lead_id}/preview`)); } catch (e: any) { setErr(e.message); } }}>
+                <td className="py-1.5 pr-2 font-medium">{l.company_name}<div className="font-normal text-slate-500">{ROLE[l.campaign_role]}</div></td>
+                <td className="pr-2">{l.first_name}<div className="text-slate-500">{l.title}</div></td>
+                <td className="pr-2">{l.fields?.niche || l.niche}<div className="text-slate-500">{l.hub || l.town || l.location}</div></td>
+                <td className="pr-2">{state === "held" ? <span className="text-red-600">{l.reason}</span>
+                  : [1, 2, 3].map((i) => l.fields?.[`lead${i}_employer`] && <div key={i}>{l.fields[`lead${i}_employer`]} · {l.fields[`lead${i}_role`]} ({l.fields[`lead${i}_count`]}x)</div>)}</td>
+              </tr>))}
+          </tbody>
+        </table>
+        {list.data?.length === 0 && <p className="py-3 text-sm text-slate-500">Nothing here yet. Press "Sync &amp; fill now".</p>}
+      </div>
+      {pv && (
+        <Modal title={`${pv.lead.company_name}: the email`} onClose={() => setPv(null)}>
+          <p className="mb-2 text-xs text-slate-500">To {pv.lead.email} · {pv.lead.state}{pv.lead.reason ? ` (${pv.lead.reason})` : ""}</p>
+          {(pv.steps || []).map((s: any) => (
+            <div key={s.seq_number} className="mb-3 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">
+              <p className="text-xs text-slate-500">Email {s.seq_number}</p>
+              <p className="font-medium">{s.subject || <span className="text-slate-400">(same thread)</span>}</p>
+              <pre className="mt-1 whitespace-pre-wrap font-sans">{s.body}</pre></div>))}
+        </Modal>)}
     </Card>
   );
 }

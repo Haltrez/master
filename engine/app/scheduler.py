@@ -1,6 +1,7 @@
 """Built-in scheduler (docker compose --profile scheduler).
 
 06:00 UK   collect every territory, then top up lead orders
+07:00 UK   personalise the leads already in the Smartlead campaigns (newest hot leads for unsent leads)
 07:30 UK   outreach auto-push (only when Settings → Outreach → auto-push is on)
 every 15m  Smartlead: sync replies, refresh stats, health check (auto-pauses a campaign over 3% bounces)
 """
@@ -52,6 +53,16 @@ def outreach_every_15(settings) -> None:
             log.warning("outreach %s failed: %s", name, exc)
 
 
+def personalise_morning(settings) -> None:
+    from . import personalise as PZ
+    from .pipeline import make_tools
+    from .smartlead import Smartlead
+    store = make_store(settings)
+    t = make_tools(store, settings)
+    PZ.run(store, settings, Smartlead(settings.smartlead_api_key, base_url=settings.smartlead_base_url),
+           client=t.claude, geocoder=t.geocoder, ch=t.ch)
+
+
 def outreach_auto_push(settings) -> None:
     from . import outreach as OR
     from .smartlead import Smartlead
@@ -65,12 +76,15 @@ def main() -> None:
     setup_logging(settings)
     last_collect: dt.date | None = None
     last_push: dt.date | None = None
+    last_pz: dt.date | None = None
     last_15: float = 0.0
     now = dt.datetime.now(UK)
     if (now.hour, now.minute) >= (6, 0):
         last_collect = now.date()       # started after 06:00: first collection tomorrow, as before
     if (now.hour, now.minute) >= (7, 30):
         last_push = now.date()
+    if (now.hour, now.minute) >= (7, 0):
+        last_pz = now.date()
     log.info("scheduler up: collection 06:00, outreach auto-push 07:30 (if on), Smartlead sync every 15 min")
     while True:
         now = dt.datetime.now(UK)
@@ -78,6 +92,9 @@ def main() -> None:
             if due(now, last_collect, 6, 0):
                 last_collect = now.date()
                 collection(settings)
+            if settings.smartlead_api_key and due(now, last_pz, 7, 0):
+                last_pz = now.date()
+                personalise_morning(settings)
             if settings.smartlead_api_key and due(now, last_push, 7, 30):
                 last_push = now.date()
                 outreach_auto_push(settings)

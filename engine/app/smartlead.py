@@ -15,6 +15,8 @@ Endpoints used:
   GET    /campaigns/{id}/sequences                     the emails (subject/body with {{variables}})
   GET    /campaigns/{id}/statistics                    per-email rows (sent_time, is_bounced...) for bounce checks
   POST   /campaigns/{id}/leads                         {"lead_list": [...], "settings": {...}} (max 400)
+  GET    /campaigns/{id}/leads                         offset, limit (<= 100): {total_leads, data: [{campaign_lead_map_id, status, lead}]}
+  POST   /campaigns/{id}/leads/{lead_id}               update a lead: {"email" (required), "custom_fields" (merged, <= 200)...}
   POST   /campaigns/{id}/leads/{lead_id}/category      {"category_id": n, "pause_lead": bool}
   GET    /leads/?email=                                lead by email (empty object when not found)
   GET    /leads/{lead_id}/campaign-overview            every campaign the lead is in
@@ -133,6 +135,24 @@ class Smartlead:
             "ignore_global_block_list": False, "ignore_unsubscribe_list": False,
             "ignore_duplicate_leads_in_other_campaign": allow_other_campaigns, "return_lead_ids": True}}
         return self._req("POST", f"/campaigns/{campaign_id}/leads", json=body) or {}
+
+    def campaign_leads(self, campaign_id: int) -> list[dict]:
+        out, offset = [], 0
+        while offset < 20000:
+            d = self._req("GET", f"/campaigns/{campaign_id}/leads", params={"offset": offset, "limit": 100}) or {}
+            rows = d.get("data") if isinstance(d, dict) else d
+            rows = rows if isinstance(rows, list) else []
+            out += rows
+            if len(rows) < 100:
+                break
+            offset += 100
+        return out
+
+    def update_lead(self, campaign_id: int, lead_id: int, email: str, custom_fields: dict, **standard) -> Any:
+        """Changes the lead everywhere in Smartlead (not only this campaign). custom_fields are merged."""
+        body = {"email": email, "custom_fields": {k: "" if v is None else str(v) for k, v in custom_fields.items()},
+                **{k: v for k, v in standard.items() if v is not None}}
+        return self._req("POST", f"/campaigns/{campaign_id}/leads/{lead_id}", json=body)
 
     def lead_by_email(self, email: str) -> dict:
         d = self._req("GET", "/leads/", params={"email": email})
