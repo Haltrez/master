@@ -72,10 +72,13 @@ def _homepage(domain: str, http: httpx.Client | None = None) -> str:
         for url in (f"https://{domain}", f"https://www.{domain}", f"http://{domain}"):
             try:
                 r = http.get(url)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError, UnicodeError):
                 continue
             if r.status_code < 400 and "html" in r.headers.get("content-type", "html"):
-                raw = r.text
+                try:
+                    raw = r.text
+                except Exception:
+                    continue
                 title = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
                 desc = re.search(r'(?is)<meta[^>]+name="description"[^>]+content="([^"]*)"', raw)
                 body = re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", raw)
@@ -227,8 +230,18 @@ def prepare(store, client, geocoder=None, ch=None, fetch=None) -> dict:
     rows = store.q("select * from campaign_leads where niche is null or hub is null or search_id is null")
     done, new_territories = 0, set()
     for r in rows:
+        loc = (r.get("location") or "").lower()
+        if loc and not any(w in loc for w in ("united kingdom", "england", "scotland", "wales", "northern ireland", ", uk")):
+            _hold(store, r, f"outside the UK ({r.get('location')})"[:200], niche="none")
+            continue
         sector = (r.get("fields") or {}).get("_sector") or ""
-        v = classify(store, client, {**r, "sector": sector}, fetch=fetch)
+        try:
+            v = classify(store, client, {**r, "sector": sector}, fetch=fetch)
+        except Exception as exc:          # one odd website or API hiccup never stops the run; tried again next run
+            log.warning("classify %s: %s", r.get("domain"), exc)
+            _hold(store, r, f"couldn't check the website yet ({type(exc).__name__}); tried again next run")
+            store.q("update campaign_leads set niche = null where campaign_id = %s and lead_id = %s", (r["campaign_id"], r["lead_id"]))
+            continue
         if not v.get("is_agency"):
             _hold(store, r, f"not a recruitment agency ({v.get('why') or 'Claude'})"[:200], is_agency=v.get("is_agency"),
                   niche="none")
@@ -241,7 +254,11 @@ def prepare(store, client, geocoder=None, ch=None, fetch=None) -> dict:
         if not town:
             _hold(store, r, "no town (location is just the country, not on Companies House)", is_agency=True, niche=niche)
             continue
-        hub = hub_for(geocoder, town)
+        try:
+            hub = hub_for(geocoder, town)
+        except Exception as exc:
+            log.warning("hub for %s: %s", town, exc)
+            hub = town
         t = watch_territory(store, niche, hub, radius_miles=TERRITORY_RADIUS)
         new_territories.add(t.get("label") or f"{niche} - {hub}")
         store.q("""update campaign_leads set is_agency = true, niche = %s, town = %s, hub = %s, search_id = %s
@@ -319,7 +336,10 @@ def summary(store, live: set[int] | None = None) -> dict:
                        and started_at > now() - interval '3 hours' and id = any(%s) order by id desc limit 1""",
                     (list(live) if live is not None else [],))
     prog = store.one("""select count(*) as total, count(*) filter (where niche is not null) as checked from campaign_leads""")
-    return {"running": {"task_id": run["id"], "since": run["started_at"].isoformat(), "checked": int(prog["checked"]),
+    last_task = store.one("""select status, error, started_at, finished_at from tasks where kind = 'personalise'
+                             and status <> 'running' order by id desc limit 1""")
+    return {"last_task": {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in last_task.items()} if last_task else None,
+            "running": {"task_id": run["id"], "since": run["started_at"].isoformat(), "checked": int(prog["checked"]),
                         "total": int(prog["total"])} if run else None,
             "by_campaign": totals, "held_reasons": [{"reason": r["reason"], "n": int(r["n"])} for r in reasons],
             "last_run": store.cache_get("personalise:last"),

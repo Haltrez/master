@@ -66,6 +66,8 @@ class FakeGeo:
 
 
 def pages(domain):
+    if domain.startswith("boom"):
+        raise RuntimeError("odd website")
     return "We build a software product" if domain.startswith("soft") else "Specialist IT recruitment agency"
 
 
@@ -88,7 +90,9 @@ def setup(store):
                        lead(3, "Wetherby Tech Talent", "Wetherby, United Kingdom"),
                        lead(4, "SoftCo", "Leeds, United Kingdom", website="softco.io"),
                        lead(5, "Nowhere Recruit", "United Kingdom"),
-                       lead(6, "Far Away IT", "Truro, United Kingdom")],
+                       lead(6, "Far Away IT", "Truro, United Kingdom"),
+                       lead(8, "Kiwi Talent", "Auckland, New Zealand"),
+                       lead(9, "Broken Site Recruit", "London, United Kingdom", website="boom.co.uk")],
                    2: [lead(7, "Bright IT Recruitment Ltd", "London, England, United Kingdom", title="Recruitment Consultant")]})
 
 
@@ -112,6 +116,7 @@ def test_each_agency_gets_niche_city_and_three_hot_leads_written_to_smartlead(st
     assert not (london[0] & london[1]) and not (london[1] & london[2])   # neighbours get different companies
     held = {r["lead_id"]: r["reason"] for r in PZ.leads(store, "held")}
     assert "not a recruitment agency" in held[4] and "no town" in held[5] and "only 0 hot leads" in held[6]
+    assert "outside the UK" in held[8] and "couldn't check the website yet" in held[9]   # one bad site doesn't stop the run
     assert claude.calls == 7                                    # one website check per agency, cached after
     # the preview reads exactly as the email will
     p = PZ.preview(store, sl, 1, 1)["steps"]
@@ -147,7 +152,8 @@ def test_api_summary_held_csv_and_run(store):
     finally:
         PZ._homepage = PZ_fetch
     s = api.get("/outreach/personalise", headers=H).json()
-    assert s["by_campaign"]["leaders"]["held"] == 6 and s["last_run"]["synced"] == 7
+    assert s["by_campaign"]["leaders"]["held"] == 8 and s["last_run"]["synced"] == 9
+    assert s["last_task"]["status"] == "ok"
     csv_text = api.get("/outreach/personalise/held.csv", headers=H).text
     assert csv_text.startswith("email,campaign,company,reason") and "p5@x5.co.uk" in csv_text
     assert api.get("/outreach/personalise", headers={"X-API-Key": "wrong"}).status_code == 401
