@@ -308,14 +308,20 @@ def run(store, settings, sl, *, client=None, geocoder=None, ch=None, fetch=None,
     return out
 
 
-def summary(store) -> dict:
+def summary(store, live: set[int] | None = None) -> dict:
     by = store.q("""select campaign_role, state, count(*) as n from campaign_leads group by 1, 2""")
     reasons = store.q("""select coalesce(regexp_replace(reason, ' \\(.*$', ''), '') as reason, count(*) as n
                          from campaign_leads where state = 'held' group by 1 order by 2 desc limit 20""")
     totals: dict[str, dict[str, int]] = {}
     for r in by:
         totals.setdefault(r["campaign_role"] or "?", {})[r["state"]] = int(r["n"])
-    return {"by_campaign": totals, "held_reasons": [{"reason": r["reason"], "n": int(r["n"])} for r in reasons],
+    run = store.one("""select id, started_at from tasks where kind = 'personalise' and status = 'running'
+                       and started_at > now() - interval '3 hours' and id = any(%s) order by id desc limit 1""",
+                    (list(live) if live is not None else [],))
+    prog = store.one("""select count(*) as total, count(*) filter (where niche is not null) as checked from campaign_leads""")
+    return {"running": {"task_id": run["id"], "since": run["started_at"].isoformat(), "checked": int(prog["checked"]),
+                        "total": int(prog["total"])} if run else None,
+            "by_campaign": totals, "held_reasons": [{"reason": r["reason"], "n": int(r["n"])} for r in reasons],
             "last_run": store.cache_get("personalise:last"),
             "territories": store.q("""select hub, niche, count(*) as n from campaign_leads where hub is not null and niche <> 'none'
                                       group by 1, 2 order by 3 desc limit 60""")}

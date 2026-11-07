@@ -238,17 +238,20 @@ function Personalise() {
   const sum = useLoad<any>("/outreach/personalise");
   const [state, setState] = useState("filled");
   const list = useLoad<any[]>(`/outreach/personalise/leads?state=${state}&limit=100`);
-  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [err, setErr] = useState<string>();
   const [pv, setPv] = useState<any>(null);
+  const live = sum.data?.running;
+  const running = starting || !!live;
+  useEffect(() => {             // while a run is going, the numbers update by themselves
+    if (!live) return;
+    const t = setInterval(() => { sum.load(); list.load(); }, 8000);
+    return () => clearInterval(t);
+  }, [live, sum.load, list.load]);
   async function run() {
-    setRunning(true); setErr(undefined);
-    try {
-      const { task_id } = await api<any>("/outreach/personalise/run", { method: "POST" });
-      const t = await waitFor<any>(`/tasks/${task_id}`, (x) => x.status !== "running", 4000, 90 * 60_000);
-      if (t.status === "error") setErr(t.error);
-      sum.load(); list.load();
-    } catch (e: any) { setErr(e.message); } finally { setRunning(false); }
+    setStarting(true); setErr(undefined);
+    try { await api<any>("/outreach/personalise/run", { method: "POST" }); await sum.load(); }
+    catch (e: any) { setErr(e.message); } finally { setStarting(false); }
   }
   const by = sum.data?.by_campaign || {};
   const n = (r: string, k: string) => by[r]?.[k] || 0;
@@ -256,9 +259,16 @@ function Personalise() {
   const last = sum.data?.last_run;
   return (
     <Card title="Campaign leads: personalised by the engine"
-      action={<Button size="sm" onClick={run} disabled={running}>{running ? "Working… (can take 30+ min the first time)" : "Sync & fill now"}</Button>}>
+      action={<Button size="sm" onClick={run} disabled={running}>{running ? "Working…" : "Sync & fill now"}</Button>}>
       <p className="text-sm text-slate-600 dark:text-slate-400">Reads the leads in your two Smartlead campaigns, checks each agency's website for its niche,
         and writes 3 real hot leads near their town into the email variables. Runs by itself every morning at 07:00; leads already emailed keep theirs.</p>
+      {live && (
+        <div className="mt-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-200" data-testid="personalise-progress">
+          <p className="font-medium">Working on it: {live.total ? `${live.checked} of ${live.total} agencies checked` : "reading your campaigns from Smartlead…"}</p>
+          {live.total > 0 && <div className="mt-2 h-2 rounded bg-blue-200 dark:bg-blue-900"><div className="h-2 rounded bg-blue-600"
+            style={{ width: `${Math.round((100 * live.checked) / live.total)}%` }} /></div>}
+          <p className="mt-1 text-xs">Started {ago(live.since)}. It keeps going if you close this page; this box updates by itself. The first run takes 30–60 minutes.</p>
+        </div>)}
       <div className="mt-3 grid gap-3 sm:grid-cols-2" data-testid="personalise-summary">
         {["leaders", "sales"].map((r) => (
           <div key={r} className="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-800">

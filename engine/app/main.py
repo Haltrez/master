@@ -350,7 +350,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-07.1"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-07.2"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1432,18 +1432,27 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     # -- personalising the leads already in the Smartlead campaigns ------------------------------------
     from . import personalise as PZ
+    pz_live: set[int] = set()     # runs going in this engine process (a restart leaves stale 'running' rows)
 
     @app.get("/outreach/personalise", dependencies=A)
     def personalise_summary():
-        return PZ.summary(db())
+        return PZ.summary(db(), pz_live)
 
     @app.post("/outreach/personalise/run", dependencies=A, status_code=202)
     def personalise_run(bg: BackgroundTasks, dry_run: bool = False):
         """Sync both campaigns' leads, check each agency and its niche, write the hot leads. Takes a while: poll GET."""
         s = db()
+        busy = s.one("""select id from tasks where kind = 'personalise' and status = 'running'
+                         and started_at > now() - interval '3 hours' order by id desc limit 1""")
+        if busy and busy["id"] in pz_live:   # one run at a time: a second tap just follows the run already going
+            return {"task_id": busy["id"], "status": "running", "already_running": True}
+        s.q("""update tasks set status = 'error', finished_at = now(), error = 'stopped (the engine restarted)'
+               where kind = 'personalise' and status = 'running' and not (id = any(%s))""", (list(pz_live),))
         sl = smartlead()
         tools = order_tools(s)
         task_id = s.create_task("personalise")
+
+        pz_live.add(task_id)
 
         def work():
             try:
@@ -1452,6 +1461,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
             except Exception as exc:
                 log.exception("personalise failed")
                 s.finish_task(task_id, "error", error=str(exc)[:300])
+            finally:
+                pz_live.discard(task_id)
         bg.add_task(work)
         return {"task_id": task_id, "status": "running"}
 

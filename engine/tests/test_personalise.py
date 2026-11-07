@@ -151,3 +151,7 @@ def test_api_summary_held_csv_and_run(store):
     csv_text = api.get("/outreach/personalise/held.csv", headers=H).text
     assert csv_text.startswith("email,campaign,company,reason") and "p5@x5.co.uk" in csv_text
     assert api.get("/outreach/personalise", headers={"X-API-Key": "wrong"}).status_code == 401
+    assert s["running"] is None
+    stale = store.create_task("personalise")         # 'running' from before an engine restart: marked stopped, new run goes
+    r = api.post("/outreach/personalise/run", headers=H).json()
+    assert r["task_id"] != stale and store.get_task(stale)["status"] == "error"
