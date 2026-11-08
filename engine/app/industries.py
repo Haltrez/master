@@ -13,13 +13,13 @@ INDUSTRIES: dict[str, dict] = {
                    "sales consultant", "area sales manager", "telesales", "marketing manager",
                    "marketing executive", "digital marketing"],
         "in": "B2B and B2C sales jobs (sales executive, business development, account manager/executive, key "
-              "account, field/area sales, telesales/inside sales, sales manager/director, estate and lettings agency "
-              "negotiators, car/vehicle sales, recruitment-free sales roles in any sector) and marketing jobs "
+              "account, field/area sales, telesales/inside sales, sales manager/director, car/vehicle sales, recruitment-free sales roles in any sector) and marketing jobs "
               "(marketing executive/manager, digital marketing, SEO/PPC, content, brand, product marketing, CRM "
               "marketing, marketing director).",
         "out": "Door-to-door or face-to-face charity fundraising and outsourced field-marketing teams (they are "
                "agencies, not employers), shop-floor retail (sales assistant, store/shop manager, cashier, "
-               "optical/pharmacy assistant, bed/furniture showroom staff), "
+               "optical/pharmacy assistant, bed/furniture showroom staff), estate and lettings agency jobs "
+               "(negotiators, lettings/branch/property managers: those are property), "
                "customer service and call-centre support that isn't selling, hospitality, care, admin, "
                "engineering, IT, finance, legal and any job that only mentions sales in passing.",
     },
@@ -54,8 +54,9 @@ INDUSTRIES: dict[str, dict] = {
                    "project manager construction", "civil engineer"],
         "in": "Site/contracts/project managers in construction, quantity surveyors, estimators, building and "
               "property surveyors, civil/structural engineers, construction planners, design managers, "
-              "facilities and property managers, skilled trades supervisors.",
-        "out": "Estate agency sales, letting negotiators, cleaners, general labourers via agencies, IT project managers.",
+              "facilities and property managers, skilled trades supervisors, estate and lettings agency staff "
+              "(sales/lettings negotiators, lettings, branch and block/property managers).",
+        "out": "Cleaners, general labourers via agencies, IT project managers.",
     },
     "Building Services (M&E)": {
         "search": ["electrical engineer", "mechanical engineer", "building services", "hvac engineer",

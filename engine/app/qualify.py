@@ -77,8 +77,10 @@ class Verdict:
         return {"ok": self.ok, "role": self.role, "reason": self.reason, "signals": self.signals, "by": self.by}
 
 
-def _key(industry: str, ad_id: Any) -> str:
-    return "qual2:" + hashlib.sha1(f"{industry.strip().lower()}|{ad_id}".encode()).hexdigest()[:24]
+def _key(industry: dict, ad_id: Any) -> str:
+    """Verdicts are kept per industry definition: changing an industry's in/out text re-checks its ads once."""
+    defn = f"{industry['name'].strip().lower()}|{industry.get('in', '')}|{industry.get('out', '')}"
+    return "qual3:" + hashlib.sha1(f"{defn}|{ad_id}".encode()).hexdigest()[:24]
 
 
 def _ad_block(i: int, ad: dict) -> str:
@@ -120,7 +122,7 @@ def judge(store, client, industry: dict, ads: list[dict]) -> dict[Any, Verdict]:
     out: dict[Any, Verdict] = {}
     todo: list[dict] = []
     for ad in ads:
-        c = store.cache_get(_key(industry["name"], ad["id"]), max_age_days=CACHE_DAYS)
+        c = store.cache_get(_key(industry, ad["id"]), max_age_days=CACHE_DAYS)
         if c is not None:
             out[ad["id"]] = Verdict(**c)
         else:
@@ -149,7 +151,7 @@ def judge(store, client, industry: dict, ads: list[dict]) -> dict[Any, Verdict]:
             if v is None:
                 continue
             out[ad["id"]] = v
-            store.cache_set(_key(industry["name"], ad["id"]), v.as_dict())
+            store.cache_set(_key(industry, ad["id"]), v.as_dict())
     passed = sum(1 for a in todo if a["id"] in out and out[a["id"]].ok)
     log.info("haiku: %s judged %d ads, %d passed", industry["name"], len(todo), passed)
     return out

@@ -196,7 +196,7 @@ def checked_pool(store, tools, search_id: int, niche: str, owed: int = 30) -> li
     """The territory's hot leads after the same checks a client order gets: in the area, Claude says the ad
     really is a {niche} job at a direct employer, verified company. Kept for a day per territory."""
     from .leadgen import pick
-    key = f"pzpool:{search_id}"
+    key = f"pzpool2:{search_id}"
     cached = store.cache_get(key, max_age_days=0.9)
     if cached is not None:
         keys = cached.get("keys") or []
