@@ -69,7 +69,7 @@ class Smartlead:
     def scrub(self, text: Any) -> str:
         return str(text).replace(self._key, "***")
 
-    def _req(self, method: str, path: str, params: dict | None = None, json: Any = None, tries: int = 3) -> Any:
+    def _req(self, method: str, path: str, params: dict | None = None, json: Any = None, tries: int = 5) -> Any:
         for attempt in range(1, tries + 1):
             if self._last is not None:
                 wait = self._last + self._interval - self._clock()
@@ -87,10 +87,17 @@ class Smartlead:
             if r.status_code == 429 and attempt < tries:
                 self._sleep(30)
                 continue
+            if r.status_code in (500, 502, 503, 504) and attempt < tries:
+                self._sleep(5 * attempt)          # Smartlead's servers hiccup now and then: wait and try again
+                continue
             if r.status_code == 401:
                 raise SmartleadError("Smartlead refused the API key (401): check SMARTLEAD_API_KEY")
+            if r.status_code >= 500:
+                raise SmartleadError(f"Smartlead's server had an error ({r.status_code}) on {method} {path}, "
+                                     f"{tries} tries: try again in a few minutes")
             if r.is_error:
-                raise SmartleadError(f"Smartlead {method} {path} failed ({r.status_code}): {self.scrub(r.text[:300])}")
+                text = r.text if "<html" not in r.text[:500].lower() else "(an error page)"
+                raise SmartleadError(f"Smartlead {method} {path} failed ({r.status_code}): {self.scrub(text[:300])}")
             if not r.content:
                 return {}
             try:

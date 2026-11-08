@@ -367,3 +367,21 @@ def test_prospect_csv_adds_people_to_tracked_agencies_by_title(api, store, sl):
         ("leaders", "pat1@agency1.co.uk"), ("sales", "sam@agency1.co.uk")}
     bad = api.post("/outreach/import-contacts", headers=H, json={"csv": "Name,Phone\nx,1\n"})
     assert bad.status_code == 422 and "email column" in bad.json()["detail"]
+
+
+def test_smartlead_server_errors_are_retried_and_reported_plainly():
+    import httpx
+    from app.smartlead import Smartlead, SmartleadError
+    calls = []
+
+    def flaky(req):
+        calls.append(1)
+        if len(calls) < 3:
+            return httpx.Response(502, text="<!DOCTYPE html><html>bad gateway</html>")
+        return httpx.Response(200, json={"total_leads": "1", "data": [{"lead": {"id": 1}}]})
+    sl = Smartlead(KEY, transport=httpx.MockTransport(flaky), sleep=lambda s: None)
+    assert len(sl.campaign_leads(1)) == 1 and len(calls) == 3
+    down = Smartlead(KEY, transport=httpx.MockTransport(lambda r: httpx.Response(502, text="<html>x</html>")), sleep=lambda s: None)
+    with pytest.raises(SmartleadError) as e:
+        down.campaigns()
+    assert "server had an error (502)" in str(e.value) and "<html" not in str(e.value)
