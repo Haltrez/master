@@ -60,7 +60,7 @@ def personalise_morning(settings) -> None:
     store = make_store(settings)
     t = make_tools(store, settings)
     PZ.run(store, settings, Smartlead(settings.smartlead_api_key, base_url=settings.smartlead_base_url),
-           client=t.claude, geocoder=t.geocoder, ch=t.ch)
+           client=t.claude, geocoder=t.geocoder, ch=t.ch, tools=PZ.no_paid_lookups(t))
 
 
 def outreach_auto_push(settings) -> None:

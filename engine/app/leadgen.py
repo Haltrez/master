@@ -157,8 +157,10 @@ def candidates(store, order: dict, now: dt.datetime) -> list[dict]:
 # the pipeline
 # ---------------------------------------------------------------------------
 def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
-         now: dt.datetime | None = None) -> tuple[list[dict], dict[str, int]]:
-    """Up to `owed` rows (one per company), best first, plus counts of what was dropped and why."""
+         now: dt.datetime | None = None, leads_only: bool = False) -> tuple[list[dict], dict[str, int]]:
+    """Up to `owed` rows (one per company), best first, plus counts of what was dropped and why.
+    leads_only: the checked hot leads themselves (with Haiku's clean 'role'), no contacts or sheet rows:
+    used to put real hot leads into cold emails."""
     from .crm_lists import CrmIndex
     from .lead_contacts import enrich_lead_company, verify_lead_company
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -279,6 +281,8 @@ def pick(store, order: dict, tools: Tools, owed: int, *, strict: bool = True,
         return max(items, key=lambda t: (t[0]["posting_count_90d"], t[0]["score"], t[0]["last_seen_at"]))
     ranked = sorted(good.items(), key=lambda kv: (-best(kv[1])[0]["posting_count_90d"], -best(kv[1])[0]["score"]))
     stats["same_company"] = sum(len(items) - 1 for _, items in ranked)   # extra roles shown under "Also hiring"
+    if leads_only:
+        return [{**best(items)[0], "role": best(items)[1].role} for _, items in ranked[:owed]], stats
     rows: list[dict] = []
     for norm, items in ranked[:owed]:
         lead, verdict, ad = best(items)

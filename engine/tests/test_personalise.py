@@ -98,13 +98,13 @@ def setup(store):
 
 def test_each_agency_gets_niche_city_and_three_hot_leads_written_to_smartlead(store):
     sl, claude = setup(store), FakeClaude()
-    first = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages)
+    first = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     # territories are watched for every niche + city the agencies need; nothing to send yet
     assert set(first["territories"]) == {"IT & Tech - London", "IT & Tech - Leeds", "IT & Tech - Truro"}
     assert first["filled"] == 0 and not sl.updates
     seed_hot_leads(store, "IT & Tech - London", 9)
     seed_hot_leads(store, "IT & Tech - Leeds", 3)
-    res = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages)
+    res = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     assert res["filled"] == 4                                   # 2 London founders, Wetherby (-> Leeds), London sales person
     up = {u[1]: u for u in sl.updates}
     f = up[1][3]
@@ -126,23 +126,23 @@ def test_each_agency_gets_niche_city_and_three_hot_leads_written_to_smartlead(st
 
 def test_morning_refresh_keeps_leads_already_in_the_sequence(store):
     sl, claude = setup(store), FakeClaude()
-    PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages)
+    PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     seed_hot_leads(store, "IT & Tech - London", 9)
-    PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages)
+    PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     sl.updates.clear()
-    again = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages)
+    again = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     assert again["filled"] == 0 and again["unchanged"] == 3 and not sl.updates     # nothing changed: no writes
     sl.rows[1][0]["status"] = "INPROGRESS"                                      # lead 1 got its first email
     seed_hot_leads(store, "IT & Tech - London", 6, start=9)
     store.q("update hot_leads set score = 500 where lead_key like 'IT & Tech - London-1_'")   # newer, better leads
-    res = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages)
+    res = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     assert res["kept_in_sequence"] == 1 and 1 not in {u[1] for u in sl.updates} and {2, 7} <= {u[1] for u in sl.updates}
 
 
 def test_no_campaigns_chosen_is_said_plainly(store):
     import pytest
     with pytest.raises(ValueError, match="Settings"):
-        PZ.run(store, Settings(), FakeSL({}), client=FakeClaude(), geocoder=FakeGeo(), fetch=pages)
+        PZ.run(store, Settings(), FakeSL({}), client=FakeClaude(), geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
 
 
 def test_api_summary_held_csv_and_run(store):
@@ -153,10 +153,11 @@ def test_api_summary_held_csv_and_run(store):
                   make_tools=lambda s, st: SimpleNamespace(claude=claude, geocoder=FakeGeo(), ch=None))
     api = TestClient(create_app(Settings(engine_api_secret="s", smartlead_api_key="k"), store=store, hooks=hooks))
     PZ_fetch, PZ._homepage = PZ._homepage, pages
+    real_pool, PZ.checked_pool = PZ.checked_pool, lambda st, tools, sid, niche, owed=30: PZ.hot_leads(st, sid)
     try:
         assert api.post("/outreach/personalise/run", headers=H).status_code == 202
     finally:
-        PZ._homepage = PZ_fetch
+        PZ._homepage, PZ.checked_pool = PZ_fetch, real_pool
     s = api.get("/outreach/personalise", headers=H).json()
     assert s["by_campaign"]["leaders"]["held"] == 8 and s["last_run"]["synced"] == 9
     assert s["last_task"]["status"] == "ok"

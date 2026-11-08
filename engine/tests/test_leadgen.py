@@ -118,3 +118,18 @@ def test_typed_industries_use_the_preset_definition_and_regions_search_a_hub_cit
     o = O.create_order(store, agency_name="Acme", industry="sales", location="Leeds", leads_wanted=5)
     assert o["industry"] == "Sales & Marketing"
     assert O.watch_territory(store, "Sales & Marketing", "Leeds")["search_id"] == o["search_id"]   # same territory
+
+
+def test_campaign_emails_only_get_hot_leads_claude_passed_for_the_niche(store):
+    """The cold-email pool goes through the same checks as a client order: an optician or a solicitor never
+    lands in a sales recruiter's email."""
+    from app import personalise as PZ
+    O.watch_territory(store, "Sales & Marketing", "Leeds")
+    label = "Sales & Marketing - Leeds"
+    add_leads(store, 2, label=label, title="Sales Executive")
+    add_leads(store, 2, label=label, title="Retail Optical Assistant", start=2)
+    sid = store.val("select id from searches where label = %s", (label,))
+    haiku = FakeHaiku()
+    pool = PZ.checked_pool(store, Tools(claude=haiku), sid, "Sales & Marketing")
+    assert sorted(h["role"] for h in pool) == ["Sales Executive", "Sales Executive"]
+    assert PZ.checked_pool(store, Tools(claude=haiku), sid, "Sales & Marketing") and len(haiku.calls) == 1   # kept for the day

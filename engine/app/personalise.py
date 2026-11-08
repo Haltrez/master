@@ -160,6 +160,29 @@ def hot_leads(store, search_id: int) -> list[dict]:
                       order by h.score desc, h.posting_count_90d desc, h.last_seen_at desc limit 60""", (search_id,))
 
 
+def no_paid_lookups(tools):
+    """The order tools without Brave/Hunter: cold emails only need the hot leads, not their contacts."""
+    import dataclasses
+    return dataclasses.replace(tools, brave=None, hunter=None) if dataclasses.is_dataclass(tools) else tools
+
+
+def checked_pool(store, tools, search_id: int, niche: str, owed: int = 30) -> list[dict]:
+    """The territory's hot leads after the same checks a client order gets: in the area, Claude says the ad
+    really is a {niche} job at a direct employer, verified company. Kept for a day per territory."""
+    from .leadgen import pick
+    key = f"pzpool:{search_id}"
+    cached = store.cache_get(key, max_age_days=0.9)
+    if cached is not None:
+        keys = cached.get("keys") or []
+        rows = {h["lead_key"]: h for h in store.q("select * from hot_leads where lead_key = any(%s)", (keys,))}
+        return [{**rows[k], "role": cached.get("roles", {}).get(k) or rows[k]["title"]} for k in keys if k in rows]
+    order = {"id": f"campaign-{search_id}", "search_id": search_id, "industry": niche, "client_id": None, "agency_id": None}
+    leads, stats = pick(store, order, tools, owed, leads_only=True)
+    store.cache_set(key, {"keys": [h["lead_key"] for h in leads], "roles": {h["lead_key"]: h["role"] for h in leads},
+                          "stats": stats})
+    return leads
+
+
 def _pick3(pool: list[dict], offset: int) -> list[dict]:
     """Three different employers, starting at a rotating offset so neighbours in a city get different ones.
     Lead 1 is the one with the most reposts of the three."""
@@ -182,7 +205,7 @@ def lead_fields(niche: str, city: str, company: str, leads: list[dict]) -> dict:
     f: dict[str, Any] = {"niche": NICHE_WORD.get(niche, niche), "city": city, "company_name": clean_company(company)}
     for i, h in enumerate(leads[:3], 1):
         f[f"lead{i}_employer"] = clean_company(h["employer_name"])
-        f[f"lead{i}_role"] = h["title"]
+        f[f"lead{i}_role"] = h.get("role") or h["title"]
         f[f"lead{i}_count"] = str(h["posting_count_90d"])
         f[f"lead{i}_since"] = month_name(h["first_seen_at"])
     return f
@@ -267,7 +290,7 @@ def prepare(store, client, geocoder=None, ch=None, fetch=None) -> dict:
     return {"prepared": done, "territories": sorted(new_territories)}
 
 
-def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False) -> dict:
+def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False, pool=None) -> dict:
     """Pick hot leads and write the custom fields. Leads already emailed (status not STARTED) keep theirs."""
     rows = store.q("""select * from campaign_leads where is_agency and search_id is not null and niche <> 'none'
                       order by hub, map_id nulls last, lead_id""")
@@ -284,7 +307,11 @@ def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False) -> dict:
             continue
         sid = r["search_id"]
         if sid not in pools:
-            pools[sid] = hot_leads(store, sid)
+            try:
+                pools[sid] = (pool or (lambda s_id, n: hot_leads(store, s_id)))(sid, r["niche"])
+            except Exception as exc:
+                log.warning("hot leads for %s: %s", sid, exc)
+                pools[sid] = []
         i = rank[r["hub"]] = rank.get(r["hub"], -1) + 1
         picked = _pick3(pools[sid], i)
         if not picked:
@@ -312,7 +339,8 @@ def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False) -> dict:
     return out
 
 
-def run(store, settings, sl, *, client=None, geocoder=None, ch=None, fetch=None, dry_run: bool = False) -> dict:
+def run(store, settings, sl, *, client=None, geocoder=None, ch=None, fetch=None, dry_run: bool = False,
+        tools=None, pool=None) -> dict:
     """Sync -> prepare -> fill. Safe to run again: it only writes what changed."""
     from .outreach import campaign_ids
     cids = campaign_ids(store)
@@ -320,7 +348,11 @@ def run(store, settings, sl, *, client=None, geocoder=None, ch=None, fetch=None,
         raise ValueError("no campaigns chosen: pick both in Settings → Outreach and press Save")
     synced = sync(store, sl, cids)
     prep = prepare(store, client, geocoder=geocoder, ch=ch, fetch=fetch)
-    res = fill(store, sl, dry_run=dry_run)
+    if pool is None and tools is not None and getattr(tools, "claude", None) is not None:
+        pool = lambda sid, niche: checked_pool(store, tools, sid, niche)   # noqa: E731
+    if pool is None:
+        raise ValueError("ANTHROPIC_API_KEY is needed on the server: every hot lead is checked by Claude before it goes in an email")
+    res = fill(store, sl, dry_run=dry_run, pool=pool)
     out = {"synced": synced, **prep, **res, "at": dt.datetime.now(dt.timezone.utc).isoformat()}
     store.cache_set("personalise:last", out)
     log.info("personalise: %s", {k: v for k, v in out.items() if k != "territories"})

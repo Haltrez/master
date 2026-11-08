@@ -350,7 +350,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-08.2"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-08.3"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -1457,7 +1457,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         def work():
             try:
                 s.finish_task(task_id, "ok", PZ.run(s, settings, sl, client=tools.claude, geocoder=tools.geocoder,
-                                                    ch=tools.ch, dry_run=dry_run))
+                                                    ch=tools.ch, dry_run=dry_run, tools=PZ.no_paid_lookups(tools)))
             except Exception as exc:
                 log.exception("personalise failed")
                 s.finish_task(task_id, "error", error=str(exc)[:300])
