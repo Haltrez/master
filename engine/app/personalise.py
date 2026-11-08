@@ -40,7 +40,8 @@ NICHE_WORD = {"Sales & Marketing": "sales & marketing", "Accountancy & Finance":
 HUBS = ["London", "Manchester", "Birmingham", "Leeds", "Bristol", "Glasgow", "Edinburgh", "Liverpool", "Sheffield",
         "Newcastle upon Tyne", "Nottingham", "Leicester", "Cardiff", "Belfast", "Southampton", "Reading", "Cambridge",
         "Norwich", "Milton Keynes", "Aberdeen", "Brighton", "Oxford", "Coventry", "Hull", "Plymouth", "Exeter"]
-HUB_MILES = 30
+HUB_MILES = 45          # small towns join the nearest big city within this distance
+MIN_AGENCIES = 2        # a NEW territory is collected only when at least this many campaign agencies need it
 TERRITORY_RADIUS = 25
 FIELDS = ("niche", "city", "company_name", *(f"lead{i}_{v}" for i in (1, 2, 3) for v in ("employer", "role", "count", "since")))
 SUFFIX = re.compile(r"[\s,]*\b(ltd\.?|limited|llp|plc|uk ltd|\(uk\))\s*$", re.I)
@@ -295,7 +296,7 @@ def _hold(store, r: dict, reason: str, **extra) -> None:
 def prepare(store, client, geocoder=None, ch=None, fetch=None) -> dict:
     """Agency check, niche, town and territory for leads that don't have them yet (no Smartlead writes)."""
     from .orders import watch_territory
-    rows = store.q("select * from campaign_leads where niche is null or hub is null or search_id is null")
+    rows = store.q("select * from campaign_leads where niche is null or (hub is null and niche <> 'none')")
     done, new_territories = 0, set()
     for r in rows:
         bad = email_problem(r["email"], r.get("domain"))
@@ -331,12 +332,50 @@ def prepare(store, client, geocoder=None, ch=None, fetch=None) -> dict:
         except Exception as exc:
             log.warning("hub for %s: %s", town, exc)
             hub = town
-        t = watch_territory(store, niche, hub, radius_miles=TERRITORY_RADIUS)
-        new_territories.add(t.get("label") or f"{niche} - {hub}")
-        store.q("""update campaign_leads set is_agency = true, niche = %s, town = %s, hub = %s, search_id = %s
-                   where campaign_id = %s and lead_id = %s""", (niche, town, hub, t["search_id"], r["campaign_id"], r["lead_id"]))
+        store.q("""update campaign_leads set is_agency = true, niche = %s, town = %s, hub = %s, search_id = null
+                   where campaign_id = %s and lead_id = %s""", (niche, town, hub, r["campaign_id"], r["lead_id"]))
         done += 1
-    return {"prepared": done, "territories": sorted(new_territories)}
+    # Territories: one per niche + city, collected every morning. A new one only when 2+ of your agencies need it
+    # (or it's already collected for an order / sold territory): a territory for a single agency costs a whole
+    # collection (job boards, Indeed via Apify, Claude ad checks) for one email.
+    groups = store.q("""select niche, hub, count(distinct coalesce(domain, lower(company_name))) as agencies
+                        from campaign_leads where is_agency and niche <> 'none' and hub is not null group by 1, 2""")
+    for g in groups:
+        label = f"{g['niche']} - {g['hub']}"
+        existing = store.one("""select s.id from searches s where lower(s.label) = lower(%s) and s.active and (
+                                  exists (select 1 from lead_orders o where o.search_id = s.id)
+                                  or exists (select 1 from client_territories t where t.search_id = s.id))""", (label,))
+        if existing or int(g["agencies"]) >= MIN_AGENCIES:
+            sid = existing["id"] if existing else watch_territory(store, g["niche"], g["hub"], radius_miles=TERRITORY_RADIUS)["search_id"]
+            new_territories.add(label)
+            store.q("""update campaign_leads set search_id = %s where niche = %s and hub = %s and is_agency
+                       and search_id is distinct from %s""", (sid, g["niche"], g["hub"], sid))
+        else:
+            store.q("""update campaign_leads set search_id = null, state = 'held',
+                         reason = %s where niche = %s and hub = %s and is_agency""",
+                    (f"only agency for {NICHE_WORD.get(g['niche'], g['niche'])} around {g['hub']}: not collected "
+                     f"(a city + niche is collected once {MIN_AGENCIES}+ of your agencies need it)", g["niche"], g["hub"]))
+    switched_off = _switch_off_lonely_territories(store)
+    return {"prepared": done, "territories": sorted(new_territories), "territories_switched_off": switched_off}
+
+
+def _switch_off_lonely_territories(store) -> list[str]:
+    """Territories made for campaign leads that no longer have 2+ agencies, and no order or sold territory."""
+    first = store.val("select min(synced_at) from campaign_leads")
+    if first is None:
+        return []
+    rows = store.q("""select s.id, s.label from searches s
+                      where s.active and s.created_at >= %s - interval '1 hour'
+                        and not exists (select 1 from lead_orders o where o.search_id = s.id)
+                        and not exists (select 1 from client_territories t where t.search_id = s.id)
+                        and not exists (select 1 from campaign_leads c where c.search_id = s.id)
+                        and exists (select 1 from campaign_leads c
+                                    where lower(c.niche || ' - ' || c.hub) = lower(s.label))""", (first,))
+    for r in rows:
+        store.q("update searches set active = false where id = %s", (r["id"],))
+    if rows:
+        log.info("campaign territories switched off (fewer than %d agencies): %s", MIN_AGENCIES, [r["label"] for r in rows])
+    return [r["label"] for r in rows]
 
 
 def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False, pool=None) -> dict:

@@ -100,22 +100,23 @@ def test_each_agency_gets_niche_city_and_three_hot_leads_written_to_smartlead(st
     sl, claude = setup(store), FakeClaude()
     first = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
     # territories are watched for every niche + city the agencies need; nothing to send yet
-    assert set(first["territories"]) == {"IT & Tech - London", "IT & Tech - Leeds", "IT & Tech - Truro"}
+    # a city + niche is collected only when 2+ agencies need it: London (3), not Leeds (1: Wetherby) or Truro (1)
+    assert set(first["territories"]) == {"IT & Tech - London"}
     assert first["filled"] == 0 and not sl.updates
     seed_hot_leads(store, "IT & Tech - London", 9)
-    seed_hot_leads(store, "IT & Tech - Leeds", 3)
     res = PZ.run(store, Settings(), sl, client=claude, geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
-    assert res["filled"] == 4                                   # 2 London founders, Wetherby (-> Leeds), London sales person
+    assert res["filled"] == 3                                   # 2 London founders + the London sales person
     up = {u[1]: u for u in sl.updates}
     f = up[1][3]
     assert (f["niche"], f["city"]) == ("IT", "London") and up[1][4]["company_name"] == "Bright IT Recruitment"
     assert all(f[k] for k in PZ.FIELDS if k != "company_name") and int(f["lead1_count"]) >= int(f["lead2_count"])
     assert f["lead1_since"] == "August" and not f["lead1_employer"].endswith("Ltd")
-    assert up[3][3]["city"] == "Leeds"                          # Wetherby is 12 miles from Leeds
+    w = store.one("select hub, reason from campaign_leads where lead_id = 3")
+    assert w["hub"] == "Leeds" and w["reason"].startswith("only agency for IT around Leeds")   # Wetherby joins Leeds
     london = [set(up[i][3][f"lead{j}_employer"] for j in (1, 2, 3)) for i in (1, 2, 7)]
     assert not (london[0] & london[1]) and not (london[1] & london[2])   # neighbours get different companies
     held = {r["lead_id"]: r["reason"] for r in PZ.leads(store, "held")}
-    assert "not a recruitment agency" in held[4] and "no town" in held[5] and "has 0 checked so far" in held[6]
+    assert "not a recruitment agency" in held[4] and "no town" in held[5] and "only agency for IT around Truro" in held[6]
     assert "outside the UK" in held[8] and "couldn't check the website yet" in held[9]   # one bad site doesn't stop the run
     assert claude.calls == 7                                    # one website check per agency, cached after
     # the preview reads exactly as the email will
@@ -190,3 +191,15 @@ def test_headline_needs_3_posts_and_companies_are_spread_across_agencies():
     leads, why = PZ._pick3(pool, used, lead1)                                      # both 3+ companies used up
     assert leads == [] and "already in other agencies' emails" in why
     assert PZ._pick3([h(0, 2), h(1, 2), h(2, 2)], {}, {})[1] == "no company posted 3+ times yet"
+
+
+def test_territories_made_for_a_single_agency_are_switched_off(store):
+    from app import orders as O
+    sl = setup(store)
+    PZ.run(store, Settings(), sl, client=FakeClaude(), geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
+    O.watch_territory(store, "IT & Tech", "Truro")            # made by the old one-territory-per-agency rule
+    O.watch_territory(store, "IT & Tech", "York")             # your own pre-sale territory: no campaign agency there
+    res = PZ.run(store, Settings(), sl, client=FakeClaude(), geocoder=FakeGeo(), fetch=pages, pool=lambda sid, n: PZ.hot_leads(store, sid))
+    assert res["territories_switched_off"] == ["IT & Tech - Truro"]
+    active = {r["label"]: r["active"] for r in store.q("select label, active from searches")}
+    assert active["IT & Tech - Truro"] is False and active["IT & Tech - York"] is True and active["IT & Tech - London"] is True
