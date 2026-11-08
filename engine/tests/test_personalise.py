@@ -139,6 +139,12 @@ def test_morning_refresh_keeps_leads_already_in_the_sequence(store):
     assert res["kept_in_sequence"] == 1 and 1 not in {u[1] for u in sl.updates} and {2, 7} <= {u[1] for u in sl.updates}
 
 
+def test_no_campaigns_chosen_is_said_plainly(store):
+    import pytest
+    with pytest.raises(ValueError, match="Settings"):
+        PZ.run(store, Settings(), FakeSL({}), client=FakeClaude(), geocoder=FakeGeo(), fetch=pages)
+
+
 def test_api_summary_held_csv_and_run(store):
     sl = setup(store)
     claude = FakeClaude()

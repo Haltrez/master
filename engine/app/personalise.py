@@ -316,6 +316,8 @@ def run(store, settings, sl, *, client=None, geocoder=None, ch=None, fetch=None,
     """Sync -> prepare -> fill. Safe to run again: it only writes what changed."""
     from .outreach import campaign_ids
     cids = campaign_ids(store)
+    if not any(cids.values()):
+        raise ValueError("no campaigns chosen: pick both in Settings → Outreach and press Save")
     synced = sync(store, sl, cids)
     prep = prepare(store, client, geocoder=geocoder, ch=ch, fetch=fetch)
     res = fill(store, sl, dry_run=dry_run)

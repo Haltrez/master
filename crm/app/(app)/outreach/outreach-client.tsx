@@ -287,7 +287,7 @@ function Personalise() {
       {!live && sum.data?.last_task?.status === "error" && (
         <p className="mt-2 rounded-lg bg-red-50 p-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300" data-testid="personalise-error">
           Last run stopped {ago(sum.data.last_task.finished_at)}: {sum.data.last_task.error}</p>)}
-      {last && <p className="mt-2 text-xs text-slate-500">Last run {ago(last.at)}: {last.filled} filled, {last.unchanged} unchanged,
+      {last && <p className="mt-2 text-xs text-slate-500">Last run {ago(last.at)}: {last.synced ?? 0} leads read from Smartlead, {last.filled} filled, {last.unchanged} unchanged,
         {" "}{last.kept_in_sequence} already in the sequence, {last.held} held{last.errors?.length ? `, ${last.errors.length} errors` : ""}.</p>}
       <ErrorNote error={err || sum.err} />
       <div className="mt-3 flex gap-2 text-sm">
