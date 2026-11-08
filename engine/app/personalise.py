@@ -32,7 +32,7 @@ from .templates import month_name
 log = logging.getLogger("personalise")
 
 MODEL = "claude-haiku-5-5"
-NICHE_WORD = {"Sales & Marketing": "sales", "Accountancy & Finance": "accountancy", "IT & Tech": "IT",
+NICHE_WORD = {"Sales & Marketing": "sales & marketing", "Accountancy & Finance": "accountancy", "IT & Tech": "IT",
               "Engineering & Manufacturing": "engineering", "Construction & Property": "construction",
               "Building Services (M&E)": "M&E", "HR": "HR", "Legal": "legal", "Healthcare & Care": "healthcare",
               "Logistics & Warehouse": "logistics", "Office & Admin": "office", "Hospitality": "hospitality",
@@ -49,9 +49,14 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["is_agen
           "properties": {"is_agency": {"type": "boolean"},
                          "niche": {"type": "string", "enum": [*INDUSTRIES.keys(), "none"]},
                          "why": {"type": "string"}}}
-SYSTEM = ("You classify UK companies for a cold email to recruitment agencies. is_agency: true only if the company "
-          "is a recruitment / staffing / executive search agency that places candidates with client companies "
-          "(not an in-house HR team, a training provider, a job board, consultancy, software or marketing firm). "
+SYSTEM = ("You classify UK companies for a cold email to recruitment agencies. is_agency: true ONLY if the website "
+          "clearly shows a recruitment / staffing / executive search business that places candidates with client "
+          "companies: words like recruitment, recruiter, candidates, vacancies, 'submit your CV', 'for employers' or "
+          "'for clients', placements, temp/perm. The word 'agency' alone is not enough: creative, production, "
+          "marketing, design, digital, talent management (actors, models, influencers), events and PR agencies are "
+          "NOT recruitment agencies. Also false for in-house HR teams, training providers, job boards, consultancies "
+          "and software firms. If the site couldn't be loaded, decide from the name and title only when they say "
+          "recruitment plainly; otherwise false. "
           "niche: the ONE industry the agency mainly recruits for, from the list; if it covers several, the one "
           "most prominent on the site; 'none' if not an agency or you can't tell. why: under 15 words.")
 
@@ -92,7 +97,7 @@ def _homepage(domain: str, http: httpx.Client | None = None) -> str:
 
 def classify(store, client, lead: dict, fetch=None) -> dict:
     """{'is_agency', 'niche', 'why'}; cached per domain (or company name) forever."""
-    key = "agencyniche:" + (lead.get("domain") or (lead.get("company_name") or "").lower())
+    key = "agencyniche2:" + (lead.get("domain") or (lead.get("company_name") or "").lower())
     cached = store.cache_get(key)
     if cached:
         return cached
@@ -110,6 +115,27 @@ def classify(store, client, lead: dict, fetch=None) -> dict:
     out = json.loads("".join(b.text for b in resp.content if getattr(b, "type", None) == "text"))
     store.cache_set(key, out)
     return out
+
+
+PUBLIC_DOMAINS = re.compile(r"(\.gov\.uk|\.nhs\.(uk|net)|\.ac\.uk|\.sch\.uk|\.police\.uk|\.mod\.uk|\.gov)$")
+FREEMAIL = {"gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.uk", "yahoo.com", "yahoo.co.uk",
+            "icloud.com", "live.com", "live.co.uk", "aol.com", "btinternet.com", "me.com", "protonmail.com"}
+
+
+def email_problem(email: str, website_domain: str | None) -> str | None:
+    """Why this address probably isn't the person at the agency now (Prospect data can be out of date)."""
+    dom = (email or "").rsplit("@", 1)[-1].lower()
+    if PUBLIC_DOMAINS.search(dom):
+        return f"email is at {dom}, not the agency: they've probably moved on"
+    if dom in FREEMAIL:
+        return f"personal email ({dom}), not an agency address"
+    site = (website_domain or "").lower()
+    if site and not (dom == site or dom.endswith("." + site) or site.endswith("." + dom)):
+        def root(d):
+            return d.split(".")[0]
+        if root(dom) != root(site):
+            return f"email is at {dom} but the agency's website is {site}: probably moved on"
+    return None
 
 
 def town_of(location: str | None) -> str:
@@ -183,22 +209,41 @@ def checked_pool(store, tools, search_id: int, niche: str, owed: int = 30) -> li
     return leads
 
 
-def _pick3(pool: list[dict], offset: int) -> list[dict]:
-    """Three different employers, starting at a rotating offset so neighbours in a city get different ones.
-    Lead 1 is the one with the most reposts of the three."""
-    if len(pool) < 3:
-        return []
-    start = (offset * 3) % len(pool) if len(pool) >= 6 else 0
-    out, seen = [], set()
-    for h in pool[start:] + pool[:start]:
+LEAD1_MIN_POSTS = 3       # the headline company: posted 3+ times ("3x reposted ..."), else the lead waits
+MAX_AS_LEAD1 = 2          # a company is the headline in at most 2 emails per run
+MAX_USES = 3              # and appears in at most 3 emails per run
+
+
+def _pick3(pool: list[dict], used: dict[str, int], lead1_used: dict[str, int]) -> tuple[list[dict], str]:
+    """Lead 1: the least-used company posted 3+ times; leads 2 and 3: the least-used others. Each company
+    is spread across agencies (MAX_AS_LEAD1 / MAX_USES), so neighbours don't get the same email.
+    Returns (three leads, '') or ([], why not)."""
+    def n(h):
+        return int(h["posting_count_90d"] or 0)
+    def free(h):
+        return used.get(h["employer_norm"], 0) < MAX_USES
+    heads = [h for h in pool if n(h) >= LEAD1_MIN_POSTS and free(h) and lead1_used.get(h["employer_norm"], 0) < MAX_AS_LEAD1]
+    if not heads:
+        strong = sum(1 for h in pool if n(h) >= LEAD1_MIN_POSTS)
+        return [], (f"no company posted {LEAD1_MIN_POSTS}+ times yet" if not strong
+                    else "its strongest hot leads are already in other agencies' emails")
+    first = min(heads, key=lambda h: (lead1_used.get(h["employer_norm"], 0), used.get(h["employer_norm"], 0), -n(h),
+                                      -float(h.get("score") or 0)))
+    rest = [h for h in pool if free(h) and h["employer_norm"] != first["employer_norm"]]
+    rest.sort(key=lambda h: (used.get(h["employer_norm"], 0), -n(h), -float(h.get("score") or 0)))
+    out, seen = [first], {first["employer_norm"]}
+    for h in rest:
         if h["employer_norm"] not in seen:
             seen.add(h["employer_norm"])
             out.append(h)
         if len(out) == 3:
             break
     if len(out) < 3:
-        return []
-    return sorted(out[:2], key=lambda h: -int(h["posting_count_90d"] or 0)) + out[2:]
+        return [], "not enough different hot leads yet"
+    for h in out:
+        used[h["employer_norm"]] = used.get(h["employer_norm"], 0) + 1
+    lead1_used[first["employer_norm"]] = lead1_used.get(first["employer_norm"], 0) + 1
+    return out, ""
 
 
 def lead_fields(niche: str, city: str, company: str, leads: list[dict]) -> dict:
@@ -253,6 +298,10 @@ def prepare(store, client, geocoder=None, ch=None, fetch=None) -> dict:
     rows = store.q("select * from campaign_leads where niche is null or hub is null or search_id is null")
     done, new_territories = 0, set()
     for r in rows:
+        bad = email_problem(r["email"], r.get("domain"))
+        if bad:
+            _hold(store, r, bad, niche="none")
+            continue
         loc = (r.get("location") or "").lower()
         if loc and not any(w in loc for w in ("united kingdom", "england", "scotland", "wales", "northern ireland", ", uk")):
             _hold(store, r, f"outside the UK ({r.get('location')})"[:200], niche="none")
@@ -295,7 +344,8 @@ def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False, pool=Non
     rows = store.q("""select * from campaign_leads where is_agency and search_id is not null and niche <> 'none'
                       order by hub, map_id nulls last, lead_id""")
     pools: dict[int, list[dict]] = {}
-    rank: dict[str, int] = {}
+    used: dict[str, int] = {}
+    lead1_used: dict[str, int] = {}
     out = {"filled": 0, "unchanged": 0, "held": 0, "kept_in_sequence": 0, "errors": []}
     for r in rows:
         if only_unsent and r["state"] == "filled" and (r["sl_status"] or "STARTED") != "STARTED":
@@ -312,11 +362,10 @@ def fill(store, sl, *, only_unsent: bool = True, dry_run: bool = False, pool=Non
             except Exception as exc:
                 log.warning("hot leads for %s: %s", sid, exc)
                 pools[sid] = []
-        i = rank[r["hub"]] = rank.get(r["hub"], -1) + 1
-        picked = _pick3(pools[sid], i)
+        picked, why = _pick3(pools[sid], used, lead1_used)
         if not picked:
-            _hold(store, r, f"only {len(pools[sid])} hot leads for {NICHE_WORD.get(r['niche'], r['niche'])} around "
-                            f"{r['hub']} so far (needs 3; collection adds more every morning)")
+            _hold(store, r, f"waiting for hot leads: {NICHE_WORD.get(r['niche'], r['niche'])} around {r['hub']} has "
+                            f"{len(pools[sid])} checked so far, {why} (collection adds more every morning)")
             out["held"] += 1
             continue
         f = lead_fields(r["niche"], r["hub"], r["company_name"] or "", picked)

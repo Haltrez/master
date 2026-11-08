@@ -115,7 +115,7 @@ def test_each_agency_gets_niche_city_and_three_hot_leads_written_to_smartlead(st
     london = [set(up[i][3][f"lead{j}_employer"] for j in (1, 2, 3)) for i in (1, 2, 7)]
     assert not (london[0] & london[1]) and not (london[1] & london[2])   # neighbours get different companies
     held = {r["lead_id"]: r["reason"] for r in PZ.leads(store, "held")}
-    assert "not a recruitment agency" in held[4] and "no town" in held[5] and "only 0 hot leads" in held[6]
+    assert "not a recruitment agency" in held[4] and "no town" in held[5] and "has 0 checked so far" in held[6]
     assert "outside the UK" in held[8] and "couldn't check the website yet" in held[9]   # one bad site doesn't stop the run
     assert claude.calls == 7                                    # one website check per agency, cached after
     # the preview reads exactly as the email will
@@ -168,3 +168,25 @@ def test_api_summary_held_csv_and_run(store):
     stale = store.create_task("personalise")         # 'running' from before an engine restart: marked stopped, new run goes
     r = api.post("/outreach/personalise/run", headers=H).json()
     assert r["task_id"] != stale and store.get_task(stale)["status"] == "error"
+
+
+def test_email_must_belong_to_the_agency():
+    assert PZ.email_problem("charlotte.gladstone@redbridge.gov.uk", "chimerarecruitment.com").startswith("email is at redbridge.gov.uk")
+    assert "personal email" in PZ.email_problem("tim@gmail.com", "congregation.io")
+    assert "probably moved on" in PZ.email_problem("jo@newjob.com", "oldagency.co.uk")
+    assert PZ.email_problem("jo@oldagency.co.uk", "www.oldagency.co.uk".removeprefix("www.")) is None
+    assert PZ.email_problem("jo@oldagency.com", "oldagency.co.uk") is None          # same name, other ending
+    assert PZ.email_problem("jo@mail.oldagency.co.uk", "oldagency.co.uk") is None
+
+
+def test_headline_needs_3_posts_and_companies_are_spread_across_agencies():
+    def h(i, n):
+        return {"employer_norm": f"e{i}", "posting_count_90d": n, "score": 100 - i}
+    pool = [h(0, 5), h(1, 4), h(2, 2), h(3, 2), h(4, 2), h(5, 2)]
+    used, lead1 = {}, {}
+    picks = [PZ._pick3(pool, used, lead1)[0] for _ in range(4)]
+    assert [p[0]["employer_norm"] for p in picks] == ["e0", "e1", "e0", "e1"]      # each headline used at most twice
+    assert max(used.values()) <= PZ.MAX_USES and all(len({x["employer_norm"] for x in p}) == 3 for p in picks)
+    leads, why = PZ._pick3(pool, used, lead1)                                      # both 3+ companies used up
+    assert leads == [] and "already in other agencies' emails" in why
+    assert PZ._pick3([h(0, 2), h(1, 2), h(2, 2)], {}, {})[1] == "no company posted 3+ times yet"
