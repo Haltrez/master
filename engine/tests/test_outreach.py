@@ -319,7 +319,7 @@ def test_api_key_never_reaches_responses_or_logs(store, caplog):
 
     def handler(req):
         assert req.url.params["api_key"] == KEY
-        return httpx.Response(500, text=f"boom for {req.url}")      # Smartlead echoing the URL back
+        return httpx.Response(422, text=f"boom for {req.url}")      # Smartlead echoing the URL back
     sl = Smartlead(KEY, transport=httpx.MockTransport(handler), sleep=lambda s: None)
     caplog.set_level(logging.INFO)
     with pytest.raises(SmartleadError) as e:
