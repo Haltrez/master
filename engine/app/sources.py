@@ -184,13 +184,29 @@ class ApifyIndeedClient:
 
     def __init__(self, token: str, *, actor: str = "valig~indeed-jobs-scraper", max_items: int = 300,
                  first_run_days: str = "", daily_days: str = "3", transport=None, sleep=time.sleep,
-                 max_wait_s: int = 900):
+                 max_wait_s: int = 900, store=None, monthly_items: int | None = None, max_keywords: int | None = None):
         if not token:
             raise ReedError("APIFY_TOKEN not set")
         self._http = httpx.Client(transport=transport, timeout=90.0, headers={"Authorization": f"Bearer {token}"})
         self.actor, self.max_items = actor.replace("/", "~"), max_items
         self.first_run_days, self.daily_days = first_run_days, daily_days
         self._sleep, self.max_wait_s = sleep, max_wait_s
+        # Apify bills per result: a monthly result budget (kept in the cache table) so the free credit lasts the month
+        self._store, self.monthly_items, self.max_keywords = store, monthly_items, max_keywords
+
+    def _month_key(self) -> str:
+        return "apify_items:" + dt.date.today().strftime("%Y-%m")
+
+    def items_left(self) -> int | None:
+        if self._store is None or not self.monthly_items:
+            return None
+        used = int((self._store.cache_get(self._month_key()) or {}).get("n", 0))
+        return max(0, self.monthly_items - used)
+
+    def _spend(self, n: int) -> None:
+        if self._store is not None and self.monthly_items:
+            used = int((self._store.cache_get(self._month_key()) or {}).get("n", 0))
+            self._store.cache_set(self._month_key(), {"n": used + n})
 
     def _items(self, run_input: dict) -> list[dict]:
         r = self._http.post(f"{self.API}/acts/{self.actor}/runs", params={"waitForFinish": 60}, json=run_input)
@@ -213,9 +229,17 @@ class ApifyIndeedClient:
 
     def pages(self, keyword: str, location: str, radius_miles: int, first_run: bool) -> Iterator[list[Job]]:
         # First run: every live ad, old ones included (pairs old and new copies of a role); then the last 3 days.
-        items = self._items({"country": "uk", "title": keyword, "location": location,
-                             "limit": self.max_items * 2 if first_run else self.max_items,
+        limit = self.max_items * 2 if first_run else self.max_items
+        left = self.items_left()
+        if left is not None:
+            if left < 20:
+                log.info("apify indeed: this month's result budget (%d) is used up; skipping until next month",
+                         self.monthly_items)
+                return
+            limit = min(limit, left)
+        items = self._items({"country": "uk", "title": keyword, "location": location, "limit": limit,
                              "datePosted": self.first_run_days if first_run else self.daily_days})
+        self._spend(len(items))
         log.info("apify indeed kw=%r location=%r items=%d", keyword, location, len(items))
         jobs = []
         for j in items:

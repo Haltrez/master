@@ -89,7 +89,9 @@ class Settings:
     jooble_max_requests_per_run: int = 4      # free keys: 500 requests for life
     apify_token: str = ""
     apify_indeed_actor: str = "valig~indeed-jobs-scraper"
-    apify_indeed_max_items: int = 300         # per keyword per run (~$0.03 per 300)
+    apify_indeed_max_items: int = 100         # per keyword per run (double on a territory's first run)
+    apify_monthly_items: int = 45000          # results a month (~$4.50: inside Apify's free $5)
+    apify_max_keywords: int = 3               # Indeed searches only a territory's first 3 keywords
     brave_api_key: str = ""
     hunter_api_key: str = ""
     smartlead_api_key: str = ""
@@ -147,7 +149,9 @@ def get_settings() -> Settings:
         jooble_max_requests_per_run=_int("JOOBLE_MAX_REQUESTS_PER_RUN", 4),
         apify_token=os.environ.get("APIFY_TOKEN", "").strip(),
         apify_indeed_actor=os.environ.get("APIFY_INDEED_ACTOR", "").strip() or "valig~indeed-jobs-scraper",
-        apify_indeed_max_items=_int("APIFY_INDEED_MAX_ITEMS", 300),
+        apify_indeed_max_items=_int("APIFY_INDEED_MAX_ITEMS", 100),
+        apify_monthly_items=_int("APIFY_MONTHLY_ITEMS", 45000),
+        apify_max_keywords=_int("APIFY_MAX_KEYWORDS", 3),
         theirstack_max_jobs_per_run=_int("THEIRSTACK_MAX_JOBS_PER_RUN", 100),
         theirstack_backfill_days=_int("THEIRSTACK_BACKFILL_DAYS", 90),
         brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip(),

@@ -271,7 +271,10 @@ def run_search(search_id: int, *, repo: Repo, reed: ReedClient | None, settings:
             def do_extra(src=src):
                 known = known_agencies()
                 flag, seen_before = backfill_flag(src.name)
-                for keyword in search.keywords:
+                kws = list(search.keywords)
+                if getattr(src, "max_keywords", None):
+                    kws = kws[:src.max_keywords]          # paid sources: the main keywords only
+                for keyword in kws:
                     for page in src.pages(keyword, area_town, area_radius, not seen_before):
                         store_page([j for j in page if title_matches(keyword, j.job_title)], "employer", src.name, known)
                 mark_backfilled(flag)

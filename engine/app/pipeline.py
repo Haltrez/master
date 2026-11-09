@@ -42,7 +42,7 @@ def make_theirstack(settings: Settings):
     return TheirStackClient(settings.theirstack_api_key)
 
 
-def make_extra_sources(settings: Settings) -> list:
+def make_extra_sources(settings: Settings, store=None) -> list:
     from .sources import ApifyIndeedClient, CareerjetClient, JoobleClient
     out = []
     if settings.careerjet_api_key:
@@ -51,7 +51,8 @@ def make_extra_sources(settings: Settings) -> list:
         out.append(JoobleClient(settings.jooble_api_key, max_requests=settings.jooble_max_requests_per_run))
     if settings.apify_token:
         out.append(ApifyIndeedClient(settings.apify_token, actor=settings.apify_indeed_actor,
-                                     max_items=settings.apify_indeed_max_items))
+                                     max_items=settings.apify_indeed_max_items, store=store,
+                                     monthly_items=settings.apify_monthly_items, max_keywords=settings.apify_max_keywords))
     return out
 
 
@@ -108,14 +109,14 @@ def order_priority(store):
 def collect_one(store, settings: Settings, search_id: int, run_id: int | None = None) -> RunResult:
     reed, adzuna = make_reed(settings), make_adzuna(settings)
     return run_search(search_id, repo=store, reed=reed, settings=settings, adzuna=adzuna, run_id=run_id,
-                      theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings),
+                      theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings, store),
                       after_run=lambda r: rebuild_all(store, settings, reed))
 
 
 def collect_all(store, settings: Settings, run_ids: dict[int, int] | None = None) -> list[RunResult]:
     reed, adzuna = make_reed(settings), make_adzuna(settings)
     return run_all(repo=store, reed=reed, settings=settings, adzuna=adzuna, run_ids=run_ids,
-                   theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings),
+                   theirstack=make_theirstack(settings), extra_sources=make_extra_sources(settings, store),
                    after_run=lambda r: rebuild_all(store, settings, reed))
 
 

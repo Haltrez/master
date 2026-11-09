@@ -104,3 +104,15 @@ def test_indeed_repost_flag_makes_a_hot_lead_on_first_sight(store):
     assert runs[0]["datePosted"] == "3"
     # Searches page shows volume per source
     assert store.listings_by_source()[s.id] == {"indeed": 2}
+
+
+def test_apify_stays_inside_a_monthly_result_budget(store):
+    runs = []
+    items = [{"key": f"k{i}", "title": "Sales Executive", "employer": {"name": f"Co {i}"}, "url": f"https://x/{i}"}
+             for i in range(60)]
+    c = apify(items, runs)
+    c._store, c.monthly_items, c.max_items = store, 100, 100
+    assert len(next(c.pages("sales", "Leeds", 20, False))) == 60 and c.items_left() == 40
+    list(c.pages("sales", "Leeds", 20, False))
+    assert runs[-1]["limit"] == 40 and c.items_left() == 0       # never asks for more than is left
+    assert list(c.pages("sales", "Leeds", 20, False)) == [] and len(runs) == 2   # used up: no Apify call at all
