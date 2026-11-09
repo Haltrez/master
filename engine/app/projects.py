@@ -17,7 +17,7 @@ from typing import Any
 
 log = logging.getLogger("projects")
 
-MAX_STEPS = 90
+MAX_STEPS = 140
 
 # $ per million tokens: (input, output, cache read). Cache writes cost 1.25x input (5-minute cache).
 PRICES = {"claude-opus-5-5": (4.0, 20.0, 0.20), "claude-sonnet-5-5": (2.0, 10.0, 0.20), "claude-haiku-5-5": (0.10, 0.50, 0.01),
@@ -79,7 +79,32 @@ they may still be worth an approach), briefs with no direct employers and who is
 and what you'll keep watching for. Plain, honest, short: the client will respect it.
 - summary_lines go under the table (e.g. market demand per role, naming the agencies, including the client's own ads).
 - Be economical: don't repeat the same search; batch ad ids into check_ads; keep going until the brief is answered \
-or you have searched every sensible variation, then submit. You have about 80 tool steps."""
+or you have searched every sensible variation, then submit. You have about 130 tool steps.
+
+Hiring evidence (client feedback: long-open pages are often "evergreen" listings, not demand):
+- ACTIVE signals: the same role re-advertised (a new job ID / URL for the same title over time), a posting or edit \
+in the last 30 days on a role open 60+ days, or several senior roles in the same function open at once.
+- PASSIVE: a page or ad that has stayed up unchanged. Never enough on its own: label it "possibly evergreen" and \
+leave it out unless the brief allows passive rows. Wording like "always looking", "speculative", "talent pool", \
+"keen to hear from" means a standing advert, not a vacancy.
+- "Open since" / dates shown to the client are the last ACTIVE date ("Re-advertised 2 Oct"), with the full \
+history of dates where you have it. Proof links are archived copies (web.archive.org) or the ATS's own data.
+
+Non-UK briefs (e.g. US): search_jobs, companies_house and distance are UK-only; don't use them. Instead:
+- Public ATS job-board APIs via fetch_page: Greenhouse https://boards-api.greenhouse.io/v1/boards/<token>/jobs \
+(add ?content=true for descriptions; each job has id, title, updated_at, absolute_url), Lever \
+https://api.lever.co/v0/postings/<company>?mode=json (createdAt), Ashby \
+https://api.ashbyhq.com/posting-api/job-board/<org> , SmartRecruiters \
+https://api.smartrecruiters.com/v1/companies/<id>/postings . Find the token from the careers page's job links.
+- Re-posts: wayback with prefix=true on the ATS job path (e.g. boards.greenhouse.io/<token>/jobs/ or \
+job-boards.greenhouse.io/<token>/jobs/, jobs.lever.co/<company>/, jobs.ashbyhq.com/<org>/) lists earlier job IDs; \
+fetch the archived copies (web.archive.org/web/<timestamp>/<url>) to confirm the same title under a different ID \
+and give those archive links as proof.
+- web_search with country "us" for news, enforcement (OCC, FinCEN, Federal Reserve, CFPB, state regulators: link \
+the regulator's own page where you can) and decision makers (name + title + public LinkedIn URL from results, \
+confirmed current from a second source such as the company's leadership page or a recent press release).
+- When the brief lists exact output columns, use exactly those (don't add the "Agency-friendly?" column unless it \
+asks)."""
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -108,7 +133,8 @@ TOOLS: list[dict[str, Any]] = [
                                          "description": "Ads you found yourself (e.g. on a careers page) to check too"}},
                           ["ad_ids", "industry"])},
     {"name": "fetch_page", "strict": True,
-     "description": "Fetch a page from an employer's own website (careers page, job page, .docx job advert) politely "
+     "description": "Fetch a page from an employer's own website (careers page, job page, .docx job advert) or a "
+                    "public ATS job-board API (JSON) politely "
                     "(robots.txt, slow). Returns title, text, job-related links, Last-Modified, schema.org dates and "
                     "whether it says the vacancy is closed. Job boards and LinkedIn are refused.",
      "input_schema": _obj({"url": S}, ["url"])},
@@ -127,8 +153,9 @@ TOOLS: list[dict[str, Any]] = [
                     "whether it's a recruitment business, address, current officers).",
      "input_schema": _obj({"name": S, "number": S}, [])},
     {"name": "web_search", "strict": True,
-     "description": "Web search (UK). For finding employers' careers pages and public LinkedIn profile URLs.",
-     "input_schema": _obj({"query": S}, ["query"])},
+     "description": "Web search. For finding employers' careers pages, news, regulator actions and public LinkedIn "
+                    "profile URLs. country: 'gb' (default) or 'us' for US briefs.",
+     "input_schema": _obj({"query": S, "country": S}, ["query"])},
     {"name": "distance", "strict": True,
      "description": "Straight-line miles between two UK places (towns or postcodes).",
      "input_schema": _obj({"from_place": S, "to_place": S}, ["from_place", "to_place"])},

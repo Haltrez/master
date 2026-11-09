@@ -194,6 +194,8 @@ class Research:
         out: dict[str, Any] = {"url": str(r.url), "status": r.status_code, "last_modified": r.headers.get("last-modified")}
         if "wordprocessingml" in ctype or url.lower().endswith(".docx"):
             text = _docx_text(r.content)
+        elif "json" in ctype:      # public ATS job-board APIs (Greenhouse, Lever, Ashby, SmartRecruiters)
+            text = _html.unescape(r.text)[:30000]
         elif "html" in ctype or "text" in ctype or not ctype:
             raw = r.text
             m = re.search(r"(?is)<title[^>]*>(.*?)</title>", raw)
@@ -314,12 +316,12 @@ class Research:
         except Exception as exc:
             return {"error": f"companies house: {exc}"[:200]}
 
-    def web_search(self, query: str) -> dict:
+    def web_search(self, query: str, country: str = "gb") -> dict:
         if not self.settings.brave_api_key:
             return {"error": "BRAVE_API_KEY not set"}
         self._wait("brave", 1.1)
         try:
-            r = self.http.get("https://api.search.brave.com/res/v1/web/search", params={"q": query, "country": "gb", "count": 10},
+            r = self.http.get("https://api.search.brave.com/res/v1/web/search", params={"q": query, "country": (country or "gb").lower()[:2], "count": 10},
                               headers={"X-Subscription-Token": self.settings.brave_api_key, "Accept": "application/json"})
             res = r.json().get("web", {}).get("results") or []
         except Exception as exc:

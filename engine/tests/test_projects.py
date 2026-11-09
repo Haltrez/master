@@ -146,3 +146,25 @@ def test_house_style_is_given_to_new_projects(store):
     c.post("/projects", headers=H, json={"brief": BRIEF + " Second one."})
     first_msg = claude.requests[2][0]["content"][0]["text"]
     assert "HOUSE STYLE" in first_msg and "DL M&E says no agencies." in first_msg
+
+
+def test_fetch_page_reads_public_ats_json_and_web_search_can_target_the_us(store):
+    import httpx
+    from app.config import Settings
+    from app.research_tools import Research
+
+    class Fetcher:
+        def get(self, url, budget):
+            return httpx.Response(200, headers={"content-type": "application/json"},
+                                  json={"jobs": [{"id": 4011, "title": "Head of BSA/AML", "updated_at": "2026-10-30"}]},
+                                  request=httpx.Request("GET", url))
+    seen = {}
+
+    def brave(req):
+        seen["country"] = req.url.params["country"]
+        return httpx.Response(200, json={"web": {"results": []}})
+    r = Research(store, Settings(brave_api_key="b"), fetcher=Fetcher(), http=httpx.Client(transport=httpx.MockTransport(brave)))
+    page = r.fetch_page("https://boards-api.greenhouse.io/v1/boards/acme/jobs")
+    assert "Head of BSA/AML" in page["text"] and "4011" in page["text"]
+    r.web_search("Acme Bank consent order OCC", country="us")
+    assert seen["country"] == "us"
