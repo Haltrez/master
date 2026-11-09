@@ -138,7 +138,7 @@ def candidates(store, order: dict, now: dt.datetime) -> list[dict]:
     """Hot leads in the order's territory that could still go out (steps 1-3)."""
     rows = store.q(
         """select h.* from hot_leads h join hot_lead_searches hs on hs.lead_key = h.lead_key
-           where hs.search_id = %s and h.status <> 'ignored'
+           where hs.search_id = %s and h.status <> 'ignored' and h.signal = 'active'
              and (h.posting_count_90d >= 2 or h.flagged_repost or h.archive_prior > 0)
              and h.last_seen_at >= %s
              and not exists (select 1 from deliveries d join hot_leads x on x.lead_key = d.lead_key
@@ -330,8 +330,11 @@ def build_row(store, order: dict, lead: dict, verdict: Verdict, ad: dict, also: 
     dates = sorted({d for d in (_as_date(x) for x in (lead.get("posting_dates") or [])) if d})
     first = dates[0] if dates else lead["first_seen_at"].date()
     n = max(int(lead["posting_count_90d"] or 1), len(dates))
-    why = [f"Advertised {n} separate times" + (f" ({_and([d.strftime('%d %b %Y').lstrip('0') for d in dates])})"
-                                                 if len(dates) > 1 else "")]
+    why = []
+    if lead.get("last_active_at"):
+        why.append(f"Re-advertised {lead['last_active_at']:%-d %b}")
+    why.append(f"advertised {n} separate times" + (f" ({_and([d.strftime('%d %b %Y').lstrip('0') for d in dates])})"
+                                                   if len(dates) > 1 else ""))
     if lead.get("flagged_repost"):
         why.append("the job board marks it as a repost")
     if (lead.get("archive_prior") or 0) > 0:
@@ -339,7 +342,8 @@ def build_row(store, order: dict, lead: dict, verdict: Verdict, ad: dict, also: 
     why.append(f"still advertised {lead['last_seen_at']:%d %b}")
     if contact and contact.get("verified_company"):
         why.append("active company on Companies House")
-    reason = "; ".join(why) + "." + (f" Check: {verdict.reason}" if verdict.reason else "")
+    reason = "; ".join(why)
+    reason = reason[0].upper() + reason[1:] + "." + (f" Check: {verdict.reason}" if verdict.reason else "")
     template = store.template_by_channel("client_hm_email")
     email_lead = {**lead, "employer_name": lead["employer_name"], "title": verdict.role,
                   "first_seen_at": dt.datetime.combine(first, dt.time(), tzinfo=dt.timezone.utc), "posting_count_90d": n}

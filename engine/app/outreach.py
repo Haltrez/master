@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 
 from .agencies import email_allowed
 from .pg import email_hash
-from .templates import month_name, niche_and_city
+from .templates import last_active_label, month_name, niche_and_city
 
 log = logging.getLogger("outreach")
 UK = ZoneInfo("Europe/London")
@@ -165,7 +165,7 @@ def _leads_for(store, search_id: int, city: str, today: dt.date, taken: set[str]
     used = {r["hot_lead_key"] for r in store.q("select hot_lead_key from lead_assignments where city = %s and date = %s",
                                                 (city.lower(), today))}
     rows = store.q("""select h.* from hot_leads h join hot_lead_searches hs on hs.lead_key = h.lead_key
-                      where hs.search_id = %s and h.status <> 'ignored'
+                      where hs.search_id = %s and h.status <> 'ignored' and h.signal = 'active'
                         and exists (select 1 from lead_contacts c where c.employer_norm = h.employer_norm and c.verified_company)
                       order by h.score desc, h.last_seen_at desc limit 40""", (search_id,))
     out, seen_emp = [], set()
@@ -186,6 +186,7 @@ def _lead_fields(leads: list[dict]) -> dict:
         f[f"lead{i}_role"] = h["title"]
         f[f"lead{i}_count"] = h["posting_count_90d"]
         f[f"lead{i}_since"] = month_name(h["first_seen_at"])
+        f[f"lead{i}_readvertised"] = last_active_label(h)
     f["_lead_keys"] = [h["lead_key"] for h in leads[:2]]
     return f
 

@@ -63,12 +63,14 @@ def test_score_each_signal():
     far = score(si(distance_miles=46))
     assert not far.in_range
     assert score(si(distance_miles=None)).points == 4              # unknown distance: kept, ranked lower
-    assert score(si(open_since=TODAY - dt.timedelta(days=30))).points == 6 + 2
-    assert score(si(reposted=True)).points == 6 + 2
+    assert score(si(open_since=TODAY - dt.timedelta(days=30))).points == 6       # open a long time: no points
+    assert score(si(reposted=True)).points == 6 + 4                                # re-advertised in 30 days: +4
     assert score(si(family_roles_at_employer=2)).points == 6 + 1
     assert score(si(sector_keywords_found=["m&e"])).points == 6 + 1
     filled = score(si(open_since=TODAY - dt.timedelta(days=61), last_seen=TODAY - dt.timedelta(days=15)))
-    assert filled.points == 6 + 2 - 3 and any("probably filled" in r for r in filled.reasons)
+    assert filled.points == 6 - 3 and any("probably filled" in r for r in filled.reasons)
+    ever = score(si(active=False, evergreen_reason="page unchanged since 1 Aug 2026"))
+    assert not ever.in_range and any(r.startswith("Possibly evergreen") for r in ever.reasons)   # watch list
 
 
 def test_score_reasons_are_plain_english_and_flag_seniority():

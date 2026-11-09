@@ -14,15 +14,19 @@ from .templates import month_year, niche_and_city, render
 LEAD_COLUMNS = ["date_added", "company", "role", "max_salary", "times_posted", "first_seen", "location", "ad_link",
                 "previous_ad_link", "decision_maker", "decision_maker_role", "email", "suggested_email", "score"]
 CSV_HEADERS = {"date_added": "Date added", "company": "Company", "role": "Role", "max_salary": "Max salary",
-               "times_posted": "Times posted", "first_seen": "First seen", "location": "Location",
+               "times_posted": "Times posted", "first_seen": "Re-advertised", "location": "Location",
                "ad_link": "Ad link", "previous_ad_link": "Previous ad", "decision_maker": "Decision maker",
                "decision_maker_role": "Their role", "email": "Email", "suggested_email": "Suggested email",
                "score": "Score"}
 
 
 def posted_since(lead: dict) -> str:
-    since = month_year(lead["first_seen_at"])
+    """'3 times, most recently on 2 Oct': the last ACTIVE date, not the first time the ad was ever captured."""
     n = int(lead.get("posting_count_90d") or 1)
+    last = lead.get("last_active_at")
+    if last:
+        return f"{n} times, most recently on {last:%-d %b}" if n > 1 else f"again on {last:%-d %b}"
+    since = month_year(lead["first_seen_at"])
     return f"{n} times since {since}" if n > 1 else f"since {since}"
 
 
@@ -35,7 +39,8 @@ def suggested_email(template: dict | None, lead: dict, contact: dict | None, nic
         body = body.replace("Hi {first_name},", "Hello,", 1)
     d = render({"subject": None, "body": body},
                {"first_name": first, "company": lead["employer_name"], "hm_role": lead["title"],
-                "posted_since": posted_since(lead), "open_since": month_year(lead["first_seen_at"]),
+                "posted_since": posted_since(lead),
+                "open_since": (f"{lead['last_active_at']:%-d %b}" if lead.get("last_active_at") else month_year(lead["first_seen_at"])),
                 "niche": niche or "", "city": city or lead.get("location_name") or ""})
     return d.body
 
@@ -58,7 +63,9 @@ def lead_rows(store, leads: list[dict], today: dt.date, default_search: dict | N
         rows.append({
             "lead_key": l["lead_key"], "date_added": today.isoformat(), "company": l["employer_name"],
             "role": l["title"], "max_salary": int(max(salaries)) if salaries else "",
-            "times_posted": l["posting_count_90d"], "first_seen": l["first_seen_at"].date().isoformat(),
+            "times_posted": l["posting_count_90d"],
+            "first_seen": (f"Re-advertised {l['last_active_at']:%-d %b %Y}" if l.get("last_active_at")
+                           else ("Possibly evergreen" if l.get("evergreen") else f"Open since {l['first_seen_at']:%-d %b %Y}")),
             "location": l.get("location_name") or "", "ad_link": latest or "", "previous_ad_link": previous,
             "decision_maker": (c or {}).get("contact_name") or "", "decision_maker_role": (c or {}).get("contact_role") or "",
             "email": email_for_export(c), "suggested_email": suggested_email(template, l, c, niche, city),

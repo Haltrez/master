@@ -31,7 +31,8 @@ def test_role_posted_four_times_in_sixty_days_is_hot_with_right_count_and_score(
     assert lead is not None
     assert lead["posting_count_90d"] == 4
     assert lead["live_now"] and not lead["long_open"]
-    assert lead["score"] == 2 * (4 - 1) + 1          # +1 live
+    assert lead["signal"] == "active" and not lead["evergreen"]
+    assert lead["score"] == 4 + 2 * 2 + 1            # active re-post +4, two more re-posts +2 each, +1 live
     assert lead["job_ids"] == [1, 2, 3, 4]
 
 
@@ -43,7 +44,7 @@ def test_threshold():
 def test_long_open_single_ad():
     lead = one(compute_hot_leads([L(1, 35, 0)], RUN, NOW))
     assert lead["long_open"] and lead["posting_count_90d"] == 1
-    assert lead["score"] == 0 + 2 + 1
+    assert lead["signal"] == "passive" and lead["score"] == 0         # long open, never re-advertised: watch list
 
 
 def test_long_open_from_reed_posted_date_on_day_one():
@@ -68,7 +69,7 @@ def test_employer_with_three_hot_keys_gets_a_point():
     for i, t in enumerate(["management accountant", "credit controller", "payroll officer"]):
         ls += [L(100 + i * 10 + n, 60 - n * 20, 55 - n * 20, title=t) for n in range(3)]
     leads = compute_hot_leads(ls, RUN, NOW)
-    assert len(leads) == 3 and all(l["score"] == 2 * 2 + 1 for l in leads)
+    assert len(leads) == 3 and all(l["score"] == 4 + 2 + 1 for l in leads)   # active +4, one more re-post +2, 3 roles +1
 
 
 def test_outside_lookback_ignored():
@@ -122,7 +123,7 @@ def test_rebuild_on_postgres_keeps_owner_status_and_skips_agencies(store):
     out = rebuild_hot_leads(store, reed=reed)
     assert (out["hot"], out["new"]) == (1, 1)
     lead = store.one("select * from hot_leads")
-    assert lead["employer_norm"] == "harlow group" and lead["posting_count_90d"] == 4 and lead["score"] == 7
+    assert lead["employer_norm"] == "harlow group" and lead["posting_count_90d"] == 4 and lead["score"] == 9
     assert lead["expiration_date"] == dt.date(2026, 12, 15)
     assert lead["latest_url"].endswith("/4") and reed.calls == [4]
     assert store.val("select count(*) from hot_lead_searches") == 1
@@ -163,3 +164,56 @@ def test_reworded_titles_at_the_same_company_and_town_are_one_role():
 def test_titles_that_differ_by_a_place_are_different_vacancies():
     ls = [L(1, 40, 30, title="area sales manager"), L(2, 5, 0, title="area sales manager north east")]
     assert compute_hot_leads(ls, RUN, NOW, threshold=2, reposts_only=True) == []
+
+
+# -- client feedback: ACTIVE re-posts vs PASSIVE evergreen listings -------------------------------------
+def test_evergreen_page_goes_to_the_watch_list_not_hot():
+    """One careers-style ad, up unchanged for 90 days with no closing date and 'always looking' wording."""
+    ad = L(1, 90, 0)
+    ad.description = "We are always looking for talented accountants to join our growing team."
+    lead = one(compute_hot_leads([ad], RUN, NOW))
+    assert lead["signal"] == "passive" and lead["score"] == 0 and lead["last_active_at"] is None
+    assert lead["evergreen"] and "always looking" in lead["evergreen_reason"]
+    # the same unchanged ad without the wording: still evergreen (60+ days, no closing date)
+    plain = one(compute_hot_leads([L(1, 70, 0)], RUN, NOW))
+    assert plain["signal"] == "passive" and plain["evergreen_reason"] == "same ad up unchanged for 70 days with no closing date"
+    # reposting a talent-pool ad isn't demand either
+    pool = [L(i, d, d - 5) for i, d in ((1, 60), (2, 35), (3, 6))]
+    for ad in pool:
+        ad.description = "Join our talent pool for future opportunities"
+    assert one(compute_hot_leads(pool, RUN, NOW))["signal"] == "passive"
+
+
+def test_actively_reposted_role_is_hot_with_its_last_active_date():
+    """Posted 50, 25 and 5 days ago (new job URL each time): an active re-post in the last 30 days."""
+    lead = one(compute_hot_leads([L(1, 50, 45), L(2, 25, 20), L(3, 5, 0)], RUN, NOW))
+    assert lead["signal"] == "active" and not lead["evergreen"]
+    assert lead["last_active_at"] == NOW - dt.timedelta(days=5)                       # "Re-advertised 30 Oct"
+    assert lead["score"] == 4 + 2 + 1                                                 # +4 active, +2 one more re-post, live
+    # re-posted, but the newest posting is 40 days old: no active signal in the last 30 days -> watch
+    old = one(compute_hot_leads([L(1, 80, 75), L(2, 60, 55), L(3, 40, 0)], RUN, NOW))
+    assert old["signal"] == "passive" and old["score"] == 0
+
+
+def test_watch_list_leads_never_reach_client_orders_or_emails(store):
+    """End to end on Postgres: the evergreen page is stored as 'passive' (watch list) and every hot-lead reader
+    (leads page, order candidates, cold-email pool) skips it; the re-posted role is 'active'."""
+    from app import orders as O
+    from app import personalise as PZ
+    from app.leadgen import candidates
+    _seed(store)                                                        # Harlow: re-posted management accountant
+    store.q("""insert into listings (job_id, posted_by, employer_name, employer_norm, title, title_norm, location_name,
+               location_norm, url, first_seen_at, last_seen_at, description, raw) values
+               (50, 'employer', 'Evergreen Ltd', 'evergreen', 'Management Accountant', 'management accountant', 'Leeds',
+                'leeds', 'https://r/50', now() - interval '80 days', now(), 'We are always looking for accountants', '{}')""")
+    store.q("insert into listing_searches values (50, 1)")
+    rebuild_hot_leads(store)
+    sig = {r["employer_norm"]: (r["signal"], r["evergreen"]) for r in store.q("select * from hot_leads")}
+    assert sig == {"harlow group": ("active", False), "evergreen": ("passive", True)}
+    assert [r["employer_norm"] for r in store.hot_leads()] == ["harlow group"]
+    assert [r["employer_norm"] for r in store.hot_leads(signal="passive")] == ["evergreen"]
+    for norm in ("harlow group", "evergreen"):
+        store.q("insert into lead_contacts (employer_norm, verified_company) values (%s, true)", (norm,))
+    assert {h["employer_norm"] for h in PZ.hot_leads(store, 1)} == {"harlow group"}
+    order = {"search_id": 1, "client_id": None}
+    assert {h["employer_norm"] for h in candidates(store, order, dt.datetime.now(dt.timezone.utc))} == {"harlow group"}

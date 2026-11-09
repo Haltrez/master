@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from .ats import detect_ats, parse_ats
+from .detect import ACTIVE_DAYS, EVERGREEN_DAYS, EVERGREEN_WORDS
 from .careers import (ExtractedJob, detail_extract, display_url, extract, find_keywords, is_document_link,
                       is_synthetic_url, page_text_hash)
 from .collect import agency_name_pattern, classify
@@ -465,11 +466,23 @@ def run_match(svc: Services, agency_name: str, use_reed: bool = True) -> MatchRe
         found = sorted({k for k in (x.lower() for x in j.get("keywords_found") or []) if k in kws}
                        | {k.lower() for k in find_keywords(j["title"], sorted(kws))})
         key = lead_key(employer_norm(emp["name"]), j["title_norm"], location_norm(j.get("location_text") or emp.get("town")))
+        changed = _date(j.get("page_hash_changed_at")) or first_seen
+        posted = _date(j.get("date_posted"))
+        recent = [d for d in (first_seen, changed, posted) if d and (today - d).days <= ACTIVE_DAYS]
+        active = key in hot or bool(recent)
+        ever = None
+        words = EVERGREEN_WORDS.search(j["title"] or "")
+        if words:
+            ever = f'worded like a standing advert ("{words.group(0)}")'
+        elif not recent and (today - changed).days >= EVERGREEN_DAYS:
+            ever = f"page unchanged since {changed:%-d %b %Y}"
+        if words:
+            active = False
         m.result = score(ScoreInput(
             title_match=m.title_match, distance_miles=m.distance, radius_miles=int(m.brief["radius_miles"]),
             open_since=m.open_since, first_seen=first_seen, last_seen=_date(j["last_seen_at"]),
             reposted=key in hot, family_roles_at_employer=m.family_roles, sector_keywords_found=found,
-            today=today, brief_seniority=m.brief.get("seniority")))
+            today=today, brief_seniority=m.brief.get("seniority"), active=active, evergreen_reason=ever))
         if m.located_by_base:
             m.result.reasons.append(f"Location: company base ({emp.get('town')}), the ad doesn't say")
         if m.result.in_range:
@@ -489,10 +502,10 @@ def run_match(svc: Services, agency_name: str, use_reed: bool = True) -> MatchRe
 
 def signal(m: MatchRow) -> str:
     parts = []
-    if m.open_since and m.result and any("30+ days" in r for r in m.result.reasons):
-        parts.append(f"Open since {_month(m.open_since)}")
-    if m.result and any(r.startswith("Reposted") for r in m.result.reasons):
-        parts.append("reposted on Reed")
+    if m.result and any(r.startswith("Re-advertised") for r in m.result.reasons):
+        parts.append("re-advertised in the last 30 days")
+    if m.result and any(r.startswith("Possibly evergreen") for r in m.result.reasons):
+        parts.append("possibly evergreen")
     if m.family_roles >= 2:
         parts.append(f"{m.family_roles} {m.family['name']} roles open at once")
     if m.title_match.kind == "related":

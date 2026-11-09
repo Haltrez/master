@@ -77,6 +77,8 @@ class ScoreInput:
     sector_keywords_found: list[str]
     today: dt.date
     brief_seniority: str | None = None
+    active: bool = True                 # a new posting / new job URL / changed page in the last 30 days
+    evergreen_reason: str | None = None
 
 
 @dataclass
@@ -112,12 +114,16 @@ def score(s: ScoreInput) -> Score:
         in_range = False
         reasons.append(f"{s.distance_miles:.0f} miles away, too far")
 
-    if s.open_since and (s.today - s.open_since).days >= 30:
-        pts += 2
-        reasons.append(f"Open since {s.open_since:%b %Y}, 30+ days (+2)")
+    # Client feedback: a long-open page is often an evergreen listing, not demand. Being open a long time
+    # scores nothing; being advertised again does.
     if s.reposted:
-        pts += 2
-        reasons.append("Reposted on Reed (+2)")
+        pts += 4
+        reasons.append("Re-advertised in the last 30 days (+4)")
+    if s.evergreen_reason:
+        reasons.append(f"Possibly evergreen: {s.evergreen_reason} (+0)")
+    if not s.active:
+        in_range = False
+        reasons.append("Watch list: no new posting, new link or page change in the last 30 days")
     if s.family_roles_at_employer >= 2:
         pts += 1
         reasons.append(f"{s.family_roles_at_employer} roles in this family open at once (+1)")

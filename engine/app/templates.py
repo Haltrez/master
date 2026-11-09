@@ -14,7 +14,8 @@ from typing import Any
 
 VARIABLES = ("first_name", "agency", "niche", "city", "lead1_employer", "lead1_role", "lead1_count", "lead1_since",
              "lead2_employer", "lead2_role", "lead2_count", "lead3_employer", "lead3_role", "lead3_count",
-             "hm_role", "open_since", "sender_name", "company", "posted_since")
+             "hm_role", "open_since", "sender_name", "company", "posted_since",
+             "lead1_readvertised", "lead2_readvertised", "lead3_readvertised")
 PLACEHOLDER = re.compile(r"\{([a-z0-9_]+)\}")
 
 
@@ -53,6 +54,23 @@ def render(template: dict, ctx: dict[str, Any]) -> Draft:
                  context=ctx)
 
 
+def readvertised(lead: dict) -> str:
+    """'Re-advertised 2 Oct': the last ACTIVE date (a new posting), not the first time the ad was ever seen."""
+    d = lead.get("last_active_at")
+    return f"Re-advertised {d:%-d %b}" if d else ""
+
+
+def last_active_label(lead: dict) -> str:
+    """'2 Oct': when the role was last advertised again (falls back to its newest posting date)."""
+    d = lead.get("last_active_at") or max(lead.get("posting_dates") or [None], key=lambda x: x or dt.date.min) \
+        or lead.get("first_seen_at")
+    return f"{d:%-d %b}" if d else ""
+
+
+def day_month(d: Any) -> str:
+    return f"{d:%-d %b}" if d else ""
+
+
 def month_name(d: Any) -> str:
     if not d:
         return ""
@@ -86,6 +104,7 @@ def lead_vars(leads: list[dict]) -> dict[str, Any]:
         ctx[f"lead{i}_role"] = lead["title"]
         ctx[f"lead{i}_count"] = lead["posting_count_90d"]
         ctx[f"lead{i}_since"] = month_name(lead["first_seen_at"])
+        ctx[f"lead{i}_readvertised"] = day_month(lead.get("last_active_at"))
     return ctx
 
 
@@ -122,6 +141,6 @@ def opener_for_lead(template: dict | None, lead: dict, niche: str, city: str) ->
     """The client's own opener to the hiring company (client_hm_email)."""
     if not template:
         return ""
-    d = render(template, {"hm_role": lead["title"], "open_since": month_year(lead["first_seen_at"]),
+    d = render(template, {"hm_role": lead["title"], "open_since": readvertised(lead) or month_year(lead["first_seen_at"]),
                           "niche": niche, "city": city})
     return d.body

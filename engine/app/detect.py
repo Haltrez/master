@@ -21,6 +21,7 @@ Score = 2*(count-1) + 2 if long_open + 1 if the employer has 3+ hot keys + 1 if 
 from __future__ import annotations
 
 import datetime as dt
+import re
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -31,6 +32,10 @@ from .normalise import lead_key
 log = logging.getLogger("detect")
 
 LONG_OPEN_DAYS = 30
+# Client feedback: a page that stays up unchanged is often an "evergreen" listing, not real demand.
+ACTIVE_DAYS = 30          # ACTIVE: the role was advertised again (a new posting / new job URL) in the last 30 days
+EVERGREEN_DAYS = 60       # PASSIVE: the same ad / page up unchanged for 60+ days
+EVERGREEN_WORDS = re.compile(r"always looking|speculative|talent pool|keen to hear from", re.I)
 LIVE_SLACK = dt.timedelta(hours=1)
 # An ad only counts as "ended" once we've stopped seeing it for this long before the next one appears.
 # (Within one run ads are seen seconds apart: that is the same ad in several places, not a repost.)
@@ -58,6 +63,7 @@ class Listing:
     url: str | None = None
     search_ids: list[int] = field(default_factory=list)
     source_says_repost: bool = False
+    description: str | None = None
 
     @property
     def key(self) -> str:
@@ -196,6 +202,7 @@ def compute_hot_leads(
             continue
         latest = max(ls, key=lambda l: (l.opened(), l.first_seen_at, l.job_id))
         previous = events[0][0] if len(events) >= 2 else None
+        sig = signals(events, ls, now, prior, flagged)
         leads.append({
             "lead_key": key,
             "employer_name": latest.employer_name,
@@ -224,18 +231,51 @@ def compute_hot_leads(
             "job_ids": sorted({l.job_id for l in ls}),
             "sources": sorted({l.source for l in ls}),
             "search_ids": sorted({s for l in ls for s in l.search_ids}),
+            **sig,
         })
 
     hot_keys_per_employer: dict[str, int] = defaultdict(int)
     for lead in leads:
         hot_keys_per_employer[lead["employer_norm"]] += 1
     for lead in leads:
-        lead["score"] = (2 * (lead["posting_count_90d"] - 1) + (2 if lead["long_open"] else 0)
-                         + (2 if lead["flagged_repost"] else 0)
-                         + (1 if hot_keys_per_employer[lead["employer_norm"]] >= 3 else 0)
-                         + (1 if lead["live_now"] else 0))
+        lead["score"] = score(lead, hot_keys_per_employer[lead["employer_norm"]])
     leads.sort(key=lambda x: (-x["score"], x["employer_norm"], x["title_norm"]))
     return leads
+
+
+def signals(events: list[list[Listing]], ls: list[Listing], now: dt.datetime, prior: int, flagged: bool) -> dict:
+    """ACTIVE: a posting that opened in the last 30 days and is a re-post (an earlier posting exists: ours, an
+    archived ad, or the board itself says repost). A new posting has a new job URL by construction (copies of
+    one ad within 7 days are one posting).
+    PASSIVE: only an ad / page that has stayed up unchanged. Evergreen: the same ad up 60+ days with no closing
+    date, or worded like a standing advert ('always looking', 'talent pool'...). Evergreen wording makes a lead
+    passive even when it keeps being reposted: a refreshed talent-pool ad isn't a vacancy."""
+    cut = now - dt.timedelta(days=ACTIVE_DAYS)
+    active_dates = []
+    for i, ev in enumerate(events):
+        start = min(x.opened() for x in ev)
+        if start >= cut and (i > 0 or prior > 0 or any(x.source_says_repost for x in ev)):
+            active_dates.append(start)
+    unchanged = [l for l in ls if (l.last_seen_at - l.opened()).days >= EVERGREEN_DAYS]
+    reason = None
+    words = next((m.group(0) for l in ls for m in [EVERGREEN_WORDS.search(f"{l.title} {l.description or ''}")] if m), None)
+    if words:
+        reason = f'worded like a standing advert ("{words}")'
+    elif any(l.expiration_date is None for l in unchanged):
+        days = max((l.last_seen_at - l.opened()).days for l in unchanged)
+        reason = f"same ad up unchanged for {days} days with no closing date"
+    active = bool(active_dates) and not words
+    return {"signal": "active" if active else "passive", "evergreen": reason is not None, "evergreen_reason": reason,
+            "last_active_at": max(active_dates) if active_dates else None}
+
+
+def score(lead: dict, roles_at_employer: int = 1) -> int:
+    """ACTIVE re-post in the last 30 days +4, each further re-post in 90 days +2; passive-only leads score 0
+    (labelled 'possibly evergreen' when they look it). Small tie-breakers for active leads only."""
+    if lead.get("signal") != "active":
+        return 0
+    reposts = max(0, int(lead["posting_count_90d"] or 1) - 1)
+    return 4 + 2 * max(0, reposts - 1) + (1 if roles_at_employer >= 3 else 0) + (1 if lead.get("live_now") else 0)
 
 
 def check_archive(store, listings: list[Listing], archive, now: dt.datetime, max_checks: int = 150,

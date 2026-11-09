@@ -121,7 +121,7 @@ def test_six_brief_yaml_end_to_end(web, clock, tmp_path):
     assert keys == sorted(keys)
     epm = next(r for r in body if r[2] == "Electrical Project Manager")
     assert epm[5] == "Aug 2026"                   # Wayback capture shown as open since
-    assert "Open since Aug" in epm[6]
+    assert "Open since" not in epm[6]             # being open a long time isn't a signal any more (evergreen risk)
     assert epm[7] == "https://www.dl-bsl.co.uk/jobs/electrical-project-manager"
     ce = next(r for r in body if r[2] == "Electrical Estimator")
     assert ce[5] == "unknown"                     # no capture -> unknown, never a guess

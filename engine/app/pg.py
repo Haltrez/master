@@ -175,6 +175,9 @@ class _CoreStore:
         fields = {k: v for k, v in row.items() if v is not None or k == "location_text"}
         cols = list(fields)
         updates = ", ".join(f"{c} = excluded.{c}" for c in cols if c not in ("employer_id", "url"))
+        if "page_hash" in fields:
+            updates += (", page_hash_changed_at = case when employer_jobs.page_hash is distinct from excluded.page_hash "
+                        "then now() else coalesce(employer_jobs.page_hash_changed_at, employer_jobs.first_seen_at) end")
         sql = (f"insert into employer_jobs ({', '.join(cols)}) values ({', '.join(['%s'] * len(cols))}) "
                f"on conflict (employer_id, url) do update set {updates}{', ' if updates else ''}last_seen_at = now() "
                "returning *")
@@ -235,7 +238,7 @@ class _CoreStore:
         if not keys:
             return set()
         return {r["lead_key"] for r in self.q("select lead_key from hot_leads where lead_key = any(%s) "
-                                              "and status <> 'ignored'", (list(keys),))}
+                                              "and status <> 'ignored' and signal = 'active'", (list(keys),))}
 
     # =========================================================================
     # Settings + tasks
@@ -301,6 +304,7 @@ class _DetectMixin:
             select l.job_id, l.source, l.employer_name, l.employer_norm, l.title, l.title_norm,
                    l.location_name, coalesce(l.location_norm, '') as location_norm, l.first_seen_at,
                    l.last_seen_at, l.posted_date, l.expiration_date, l.url, l.source_says_repost,
+                   left(l.description, 4000) as description,
                    coalesce(array_agg(ls.search_id) filter (where ls.search_id is not null), '{}') as search_ids
             from listings l left join listing_searches ls on ls.job_id = l.job_id
             where l.posted_by = 'employer' and l.last_seen_at >= %s
@@ -326,7 +330,8 @@ class _DetectMixin:
         cols = ("lead_key", "employer_name", "employer_norm", "title", "title_norm", "location_name",
                 "location_norm", "posting_count_90d", "first_seen_at", "last_seen_at", "live_now", "long_open",
                 "score", "latest_url", "job_ids", "expiration_date", "sources", "old_ad_url", "archive_prior",
-                "posting_dates", "previous_url", "flagged_repost")
+                "posting_dates", "previous_url", "flagged_repost", "signal", "evergreen", "evergreen_reason",
+                "last_active_at")
         sql = (f"insert into hot_leads ({', '.join(cols)}, updated_at) values ({', '.join(['%s'] * len(cols))}, now()) "
                "on conflict (lead_key) do update set "
                + ", ".join(f"{c} = excluded.{c}" for c in cols if c not in ("lead_key", "latest_url"))
@@ -372,8 +377,11 @@ class _DetectMixin:
 
     def hot_leads(self, *, search_id: int | None = None, min_score: int | None = None,
                   since: dt.datetime | None = None, status: str | None = None, live_only: bool = False,
-                  limit: int = 500) -> list[dict]:
+                  limit: int = 500, signal: str | None = "active") -> list[dict]:
+        """signal: 'active' = hot leads (default), 'passive' = the watch list, None = both."""
         where, params = ["true"], []
+        if signal:
+            where.append("h.signal = %s"); params.append(signal)
         if search_id:
             where.append("exists (select 1 from hot_lead_searches s where s.lead_key = h.lead_key and s.search_id = %s)")
             params.append(search_id)
@@ -629,7 +637,7 @@ class _CrmMixin:
             select distinct on (h.lead_key) h.*, s.id as search_id, s.label as search_label, s.location as search_location
             from client_territories t join hot_lead_searches hs on hs.search_id = t.search_id
             join hot_leads h on h.lead_key = hs.lead_key join searches s on s.id = t.search_id
-            where t.client_id = %s and h.status <> 'ignored'
+            where t.client_id = %s and h.status <> 'ignored' and h.signal = 'active'
               and not exists (select 1 from deliveries d where d.client_id = %s and d.lead_key = h.lead_key)
             order by h.lead_key, h.score desc limit %s""", (client_id, client_id, limit))
 
@@ -775,7 +783,7 @@ class _LeadContactMixin:
     def lead_companies_to_enrich(self, limit: int = 20) -> list[dict]:
         """Hot-lead companies not checked on Companies House yet, best score first."""
         return self.q("""select employer_norm, max(employer_name) as employer_name, max(score) as score
-                         from hot_leads h where status <> 'ignored'
+                         from hot_leads h where status <> 'ignored' and signal = 'active'
                          and not exists (select 1 from lead_contacts c where c.employer_norm = h.employer_norm)
                          group by employer_norm order by max(score) desc limit %s""", (limit,))
 
@@ -785,6 +793,7 @@ class _LeadContactMixin:
         return self.q("""select c.employer_norm, max(h.employer_name) as employer_name, max(h.score) as score
                          from lead_contacts c join hot_leads h on h.employer_norm = c.employer_norm
                          where c.verified_company and not c.contacts_checked and h.status <> 'ignored'
+                           and h.signal = 'active'
                            and exists (select 1 from hot_lead_searches hs join lead_orders o on o.search_id = hs.search_id
                                        where hs.lead_key = h.lead_key and o.status in ('collecting', 'waiting', 'error'))
                          group by c.employer_norm order by max(h.score) desc limit %s""", (limit,))

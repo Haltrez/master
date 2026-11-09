@@ -220,9 +220,9 @@ class Toolbox:
             params.append(min(int(a.get("limit") or 20), 50))
             rows = s.q(f"""select h.employer_name, h.title, h.location_name, h.posting_count_90d as times_posted,
                                   h.score, h.first_seen_at::date as first_seen, h.latest_url
-                           from hot_leads h where {' and '.join(where)} and h.status <> 'ignored'
+                           from hot_leads h where {' and '.join(where)} and h.status <> 'ignored' and h.signal = 'active'
                            order by h.score desc limit %s""", params)
-            total = s.val(f"select count(*) from hot_leads h where {' and '.join(where)} and h.status <> 'ignored'",
+            total = s.val(f"select count(*) from hot_leads h where {' and '.join(where)} and h.status <> 'ignored' and h.signal = 'active'",
                           params[:-1])
             return {"total_matching": total, "top": rows}
         if name == "agency_info":

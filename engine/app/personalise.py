@@ -27,7 +27,7 @@ from psycopg.types.json import Jsonb
 
 from .crm_lists import domain_of
 from .industries import INDUSTRIES
-from .templates import month_name
+from .templates import last_active_label, month_name
 
 log = logging.getLogger("personalise")
 
@@ -43,7 +43,7 @@ HUBS = ["London", "Manchester", "Birmingham", "Leeds", "Bristol", "Glasgow", "Ed
 HUB_MILES = 45          # small towns join the nearest big city within this distance
 MIN_AGENCIES = 2        # a NEW territory is collected only when at least this many campaign agencies need it
 TERRITORY_RADIUS = 25
-FIELDS = ("niche", "city", "company_name", *(f"lead{i}_{v}" for i in (1, 2, 3) for v in ("employer", "role", "count", "since")))
+FIELDS = ("niche", "city", "company_name", *(f"lead{i}_{v}" for i in (1, 2, 3) for v in ("employer", "role", "count", "since", "readvertised")))
 SUFFIX = re.compile(r"[\s,]*\b(ltd\.?|limited|llp|plc|uk ltd|\(uk\))\s*$", re.I)
 
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["is_agency", "niche", "why"],
@@ -182,7 +182,7 @@ def ch_town(ch, company: str) -> str:
 
 def hot_leads(store, search_id: int) -> list[dict]:
     return store.q("""select h.* from hot_leads h join hot_lead_searches hs on hs.lead_key = h.lead_key
-                      where hs.search_id = %s and h.status <> 'ignored' and h.posting_count_90d >= 2
+                      where hs.search_id = %s and h.status <> 'ignored' and h.signal = 'active' and h.posting_count_90d >= 2
                         and exists (select 1 from lead_contacts c where c.employer_norm = h.employer_norm and c.verified_company)
                       order by h.score desc, h.posting_count_90d desc, h.last_seen_at desc limit 60""", (search_id,))
 
@@ -254,6 +254,7 @@ def lead_fields(niche: str, city: str, company: str, leads: list[dict]) -> dict:
         f[f"lead{i}_role"] = h.get("role") or h["title"]
         f[f"lead{i}_count"] = str(h["posting_count_90d"])
         f[f"lead{i}_since"] = month_name(h["first_seen_at"])
+        f[f"lead{i}_readvertised"] = last_active_label(h)
     return f
 
 

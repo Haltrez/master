@@ -289,7 +289,10 @@ TERRITORY_SQL = """
       (select count(*) from listing_searches ls join listings l on l.job_id = ls.job_id
          where ls.search_id = s.id and l.posted_by = 'employer' and l.last_seen_at > now() - interval '14 days') as ads,
       (select count(*) from hot_lead_searches hs join hot_leads h on h.lead_key = hs.lead_key
-         where hs.search_id = s.id and (h.posting_count_90d >= 2 or h.flagged_repost or h.archive_prior > 0)) as reposted_roles,
+         where hs.search_id = s.id and h.signal = 'active'
+           and (h.posting_count_90d >= 2 or h.flagged_repost or h.archive_prior > 0)) as reposted_roles,
+      (select count(*) from hot_lead_searches hs join hot_leads h on h.lead_key = hs.lead_key
+         where hs.search_id = s.id and h.signal = 'passive') as watch_roles,
       (select min(l.first_seen_at)::date from listing_searches ls join listings l on l.job_id = ls.job_id
          where ls.search_id = s.id) as collecting_since
     from searches s where position(' - ' in s.label) > 0"""

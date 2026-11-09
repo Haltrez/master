@@ -350,7 +350,7 @@ CLIENT_PLANS = ("pilot", "founding", "done_for_you")
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-VERSION = "2026-11-09.1"   # shown in the CRM footer, so it's visible when an update is live
+VERSION = "2026-11-09.2"   # shown in the CRM footer, so it's visible when an update is live
 
 
 def create_app(settings: Settings | None = None, store: PgStore | None = None, hooks: Hooks | None = None) -> FastAPI:
@@ -450,10 +450,11 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
     # -- hot leads -------------------------------------------------------------------
     @app.get("/hot-leads", dependencies=A)
     def hot_leads(search_id: int | None = None, min_score: int | None = None, since: dt.datetime | None = None,
-                  status: str | None = None, live_only: bool = False, limit: int = 500):
+                  status: str | None = None, live_only: bool = False, limit: int = 500, list: str = "hot"):
+        """list=hot (active re-posts, the default) or list=watch (passive: long open / possibly evergreen)."""
         s = db()
         rows = s.hot_leads(search_id=search_id, min_score=min_score, since=since, status=status,
-                           live_only=live_only, limit=limit)
+                           live_only=live_only, limit=limit, signal="passive" if list == "watch" else "active")
         contacts = s.lead_contacts_for([r["employer_norm"] for r in rows])
         for r in rows:
             c = contacts.get(r["employer_norm"])
@@ -719,11 +720,12 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
 
     @app.get("/exports/hot-leads.csv", dependencies=A)
     def hot_leads_csv(search_id: int | None = None, min_score: int | None = None, status: str | None = None,
-                      live_only: bool = False):
+                      live_only: bool = False, list: str = "hot"):
         from .leads import CSV_HEADERS, LEAD_COLUMNS, lead_rows
         s = db()
         search = s.search_row(search_id) if search_id else None
-        leads = s.hot_leads(search_id=search_id, min_score=min_score, status=status, live_only=live_only)
+        leads = s.hot_leads(search_id=search_id, min_score=min_score, status=status, live_only=live_only,
+                            signal="passive" if list == "watch" else "active")
         if strict(s):
             leads = only_verified(s, leads)
         rows = lead_rows(s, leads, uk_today(), search)
@@ -811,7 +813,8 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         return {"date": d, "target": target(s), "scorecard": sc, "history": s.daily_history(14),
                 "do_next": do_next(s), "follow_ups": [agency_out(a) for a in s.follow_ups_due(d)],
                 "replies": [agency_out(a) for a in s.replies_waiting()], "new_matches": s.new_matches_by_agency(),
-                "new_hot_leads": s.q("select count(*) as n from hot_leads where created_at >= now() - interval '1 day'")[0]["n"]}
+                "new_hot_leads": s.q("select count(*) as n from hot_leads where created_at >= now() - interval '1 day' "
+                                     "and signal = 'active'")[0]["n"]}
 
     @app.get("/digest/today", dependencies=A)
     def digest():
@@ -819,6 +822,7 @@ def create_app(settings: Settings | None = None, store: PgStore | None = None, h
         d = uk_today()
         sc = s.scorecard(d, d - dt.timedelta(days=d.weekday()))
         new_hot = s.q("select * from hot_leads where created_at >= now() - interval '1 day' and status <> 'ignored' "
+                      "and signal = 'active' "
                       "order by score desc limit 20")
         follow = s.follow_ups_due(d)
         agencies_next = do_next(s, 10)

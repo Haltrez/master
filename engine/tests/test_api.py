@@ -172,7 +172,7 @@ def test_daily_leads_never_returns_the_same_lead_twice(api, store):
     day1 = api.get(f"/clients/{c['id']}/daily-leads", headers=H, params={"mark": True}).json()
     assert day1["count"] == 3
     first = day1["leads"][0]
-    assert first["company"] == "Harlow Group" and first["times_posted"] == 4 and first["first_seen"] == "2026-08-12"
+    assert first["company"] == "Harlow Group" and first["times_posted"] == 4 and first["first_seen"] == "Open since 12 Aug 2026"
     assert first["suggested_email"].startswith("Hello,")                 # no decision maker yet
     assert "Harlow Group has advertised the Management Accountant role 4 times since August 2026" in first["suggested_email"]
     assert "Accountancy recruitment around Leeds" in first["suggested_email"]
